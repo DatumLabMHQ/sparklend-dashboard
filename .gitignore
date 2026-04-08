@@ -1,0 +1,53 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build
+dist
+
+# misc
+.DS_Store
+*.pem
+Thumbs.db
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# editor
+.vscode/
+.idea/
+
+# cache files (data fetcher)
+.liquidation-*.json
+.sparklend-*.json
+.markets-*.json
+.wallets-*.json
+.financials-*.json
+.flashloan-*.json
+.wallet-*.json
+*-cache.json
+tmp/
+
+# claude code local
+.claude/

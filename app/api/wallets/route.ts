@@ -1,0 +1,360 @@
+import { NextResponse } from "next/server"
+import {
+  client,
+  POOL,
+  POOL_ADDRESSES_PROVIDER,
+  poolAddressesProviderAbi,
+  poolDataProviderAbi,
+  poolAbi,
+} from "@/lib/contracts"
+import { type Address, parseAbiItem } from "viem"
+import { readFileSync, writeFileSync, existsSync } from "fs"
+import { join } from "path"
+
+export const dynamic = "force-dynamic"
+
+const DEPLOYMENT_BLOCK = 16_848_000n
+const CHUNK_SIZE = 50_000n
+
+const CACHE_DIR = process.cwd()
+const USER_CACHE_FILE = join(CACHE_DIR, ".wallet-users-cache.json")
+const POSITION_CACHE_FILE = join(CACHE_DIR, ".wallet-positions-cache.json")
+
+// In-memory state
+let memPositions: any = null
+let memPositionsTime = 0
+let quickScanRunning = false
+let bgScanRunning = false
+
+const supplyEvent = parseAbiItem(
+  "event Supply(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referralCode)"
+)
+const borrowEvent = parseAbiItem(
+  "event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint256 interestRateMode, uint256 borrowRate, uint16 indexed referralCode)"
+)
+
+// ── Cache helpers ──
+
+function readJSON(path: string): any {
+  try {
+    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf-8"))
+  } catch (e: any) {
+    console.error(`Read ${path} failed:`, e.message)
+  }
+  return null
+}
+
+function writeJSON(path: string, data: any) {
+  try {
+    const safe = JSON.parse(JSON.stringify(data, (_, v) => (v === Infinity ? "Infinity" : v)))
+    writeFileSync(path, JSON.stringify(safe), "utf-8")
+  } catch (e: any) {
+    console.error(`Write ${path} failed:`, e.message)
+  }
+}
+
+function restoreInfinity(positions: any[]) {
+  positions?.forEach((p: any) => {
+    if (p.healthFactor === "Infinity" || p.healthFactor === null) p.healthFactor = Infinity
+  })
+}
+
+// ── Scanning ──
+
+async function scanChunk(from: bigint, to: bigint, userSet: Set<string>) {
+  const [sLogs, bLogs] = await Promise.all([
+    client.getLogs({ address: POOL, event: supplyEvent, fromBlock: from, toBlock: to }),
+    client.getLogs({ address: POOL, event: borrowEvent, fromBlock: from, toBlock: to }),
+  ])
+  for (const l of sLogs) if (l.args.onBehalfOf) userSet.add(l.args.onBehalfOf.toLowerCase())
+  for (const l of bLogs) if (l.args.onBehalfOf) userSet.add(l.args.onBehalfOf.toLowerCase())
+}
+
+async function scanRange(
+  from: bigint,
+  to: bigint,
+  userSet: Set<string>,
+  opts?: { saveEvery?: number; label?: string }
+): Promise<bigint> {
+  const saveEvery = opts?.saveEvery || 20
+  let current = from
+  let chunks = 0
+  let lastOk = from - 1n
+
+  while (current <= to) {
+    const end = current + CHUNK_SIZE > to ? to : current + CHUNK_SIZE
+    try {
+      await scanChunk(current, end, userSet)
+      lastOk = end
+    } catch {
+      // Retry with 10k sub-chunks
+      let sub = current
+      while (sub <= end) {
+        const subEnd = sub + 10_000n > end ? end : sub + 10_000n
+        try {
+          await new Promise((r) => setTimeout(r, 200))
+          await scanChunk(sub, subEnd, userSet)
+          lastOk = subEnd
+        } catch {
+          lastOk = subEnd // skip on double failure
+        }
+        sub = subEnd + 1n
+      }
+    }
+    current = end + 1n
+    chunks++
+
+    if (chunks % saveEvery === 0) {
+      const cached = readJSON(USER_CACHE_FILE) || {}
+      // Merge with any existing users
+      const merged = new Set([...(cached.users || []), ...userSet])
+      writeJSON(USER_CACHE_FILE, {
+        ...cached,
+        users: Array.from(merged),
+        deploymentProgress: lastOk.toString(),
+        timestamp: Date.now(),
+      })
+      console.log(`[${opts?.label || "scan"}] block ${lastOk}, ${merged.size} users`)
+    }
+  }
+  return lastOk
+}
+
+// ── Position fetching ──
+
+async function fetchPositions(allUsers: string[]) {
+  const BATCH = 300
+  const active: any[] = []
+
+  for (let i = 0; i < allUsers.length; i += BATCH) {
+    const batch = allUsers.slice(i, i + BATCH)
+    try {
+      const calls = batch.map((u) => ({
+        address: POOL,
+        abi: poolAbi,
+        functionName: "getUserAccountData" as const,
+        args: [u as Address],
+      }))
+      const results = await client.multicall({ contracts: calls })
+      for (let j = 0; j < batch.length; j++) {
+        const r = results[j]
+        if (r.status !== "success" || !r.result) continue
+        const d = r.result as any
+        const col = Number(d[0]) / 1e8
+        const debt = Number(d[1]) / 1e8
+        const hf = Number(d[5]) / 1e18
+        if (col > 0 || debt > 0) {
+          active.push({
+            address: batch[j],
+            totalCollateral: col,
+            totalDebt: debt,
+            healthFactor: debt > 0 ? (hf > 1e15 ? Infinity : hf) : Infinity,
+          })
+        }
+      }
+    } catch (e: any) {
+      console.warn(`Position batch ${i} failed:`, e.shortMessage || e.message)
+    }
+  }
+  active.sort((a, b) => b.totalCollateral - a.totalCollateral)
+  return active
+}
+
+async function fetchAssetBreakdown(topUsers: any[]) {
+  const dpAddr = (await client.readContract({
+    address: POOL_ADDRESSES_PROVIDER,
+    abi: poolAddressesProviderAbi,
+    functionName: "getPoolDataProvider",
+  })) as Address
+
+  const reserves = (await client.readContract({
+    address: dpAddr,
+    abi: poolDataProviderAbi,
+    functionName: "getAllReservesTokens",
+  })) as Array<{ symbol: string; tokenAddress: Address }>
+
+  const calls: any[] = []
+  for (const u of topUsers)
+    for (const t of reserves)
+      calls.push({
+        address: dpAddr,
+        abi: poolDataProviderAbi,
+        functionName: "getUserReserveData",
+        args: [t.tokenAddress, u.address as Address],
+      })
+
+  const results: any[] = []
+  for (let i = 0; i < calls.length; i += 200) {
+    try {
+      const r = await client.multicall({ contracts: calls.slice(i, i + 200) })
+      results.push(...r)
+    } catch {
+      results.push(...calls.slice(i, i + 200).map(() => ({ status: "failure" })))
+    }
+  }
+
+  return topUsers.map((u, ui) => {
+    const col: string[] = [], bor: string[] = []
+    for (let j = 0; j < reserves.length; j++) {
+      const r = results[ui * reserves.length + j]
+      if (r?.status !== "success" || !r.result) continue
+      const d = r.result as any
+      if (Number(d[0]) > 0) col.push(reserves[j].symbol)
+      if (Number(d[1]) > 0 || Number(d[2]) > 0) bor.push(reserves[j].symbol)
+    }
+    return { ...u, collateralAssets: col, borrowAssets: bor }
+  })
+}
+
+// ── Background full scan from deployment ──
+
+async function backgroundFullScan() {
+  if (bgScanRunning) return
+  bgScanRunning = true
+  try {
+    const currentBlock = await client.getBlockNumber()
+    const cached = readJSON(USER_CACHE_FILE)
+    const existingUsers = new Set<string>(cached?.users || [])
+    const progress = cached?.deploymentProgress ? BigInt(cached.deploymentProgress) : DEPLOYMENT_BLOCK - 1n
+    const recentStart = cached?.recentScanStart ? BigInt(cached.recentScanStart) : currentBlock
+
+    // Scan gap: [progress+1 .. recentStart]
+    if (progress < recentStart - 100n) {
+      console.log(`Background scan: blocks ${progress + 1n} to ${recentStart} (${existingUsers.size} known users)`)
+      const lastOk = await scanRange(progress + 1n, recentStart, existingUsers, { saveEvery: 10, label: "bg" })
+      writeJSON(USER_CACHE_FILE, {
+        users: Array.from(existingUsers),
+        deploymentProgress: lastOk.toString(),
+        recentScanStart: cached?.recentScanStart,
+        timestamp: Date.now(),
+      })
+      console.log(`Background scan done: ${existingUsers.size} total users`)
+
+      // Rebuild positions with new users
+      const active = await fetchPositions(Array.from(existingUsers))
+      const top = await fetchAssetBreakdown(active.slice(0, 100))
+      const rest = active.slice(100).map((u) => ({ ...u, collateralAssets: [], borrowAssets: [] }))
+      const response = {
+        positions: [...top, ...rest],
+        totalDiscovered: existingUsers.size,
+        totalActive: active.length,
+        totalCollateral: active.reduce((s, u) => s + u.totalCollateral, 0),
+        totalDebt: active.reduce((s, u) => s + u.totalDebt, 0),
+      }
+      memPositions = response
+      memPositionsTime = Date.now()
+      writeJSON(POSITION_CACHE_FILE, { ...response, timestamp: Date.now() })
+      console.log(`Rebuilt positions: ${active.length} active wallets`)
+    }
+  } catch (e: any) {
+    console.error("Background scan error:", e.message)
+  } finally {
+    bgScanRunning = false
+  }
+}
+
+// ── API handler ──
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const page = parseInt(url.searchParams.get("page") || "1")
+  const pageSize = parseInt(url.searchParams.get("pageSize") || "50")
+
+  function paginate(data: any) {
+    const all = data.positions || []
+    const start = (page - 1) * pageSize
+    return NextResponse.json({
+      ...data,
+      positions: all.slice(start, start + pageSize),
+      page,
+      pageSize,
+      totalPages: Math.ceil(all.length / pageSize),
+      scanComplete: !bgScanRunning && !quickScanRunning,
+    })
+  }
+
+  // 1. Memory cache (10 min)
+  if (memPositions && Date.now() - memPositionsTime < 600_000) {
+    return paginate(memPositions)
+  }
+
+  // 2. File cache (1 hour)
+  const fileCached = readJSON(POSITION_CACHE_FILE)
+  if (fileCached?.positions && Date.now() - fileCached.timestamp < 3_600_000) {
+    restoreInfinity(fileCached.positions)
+    memPositions = fileCached
+    memPositionsTime = Date.now()
+    backgroundFullScan().catch(() => {})
+    return paginate(fileCached)
+  }
+
+  // 3. No position cache — build from scratch
+  if (quickScanRunning) {
+    // Another request is already scanning, return empty skeleton
+    return NextResponse.json({
+      positions: [],
+      totalDiscovered: 0,
+      totalActive: 0,
+      totalCollateral: 0,
+      totalDebt: 0,
+      page: 1,
+      pageSize,
+      totalPages: 0,
+      scanComplete: false,
+    })
+  }
+
+  quickScanRunning = true
+  try {
+    let userCache = readJSON(USER_CACHE_FILE)
+    let allUsers: string[] = userCache?.users || []
+
+    if (allUsers.length === 0) {
+      // Quick scan: recent 500k blocks for fast initial data
+      const currentBlock = await client.getBlockNumber()
+      const quickStart = currentBlock - 500_000n
+      console.log(`Quick scan: blocks ${quickStart} to ${currentBlock}`)
+      const userSet = new Set<string>()
+      await scanRange(quickStart, currentBlock, userSet, { label: "quick" })
+      allUsers = Array.from(userSet)
+      writeJSON(USER_CACHE_FILE, {
+        users: allUsers,
+        deploymentProgress: (DEPLOYMENT_BLOCK - 1n).toString(),
+        recentScanStart: quickStart.toString(),
+        timestamp: Date.now(),
+      })
+      console.log(`Quick scan done: ${allUsers.length} users found`)
+    }
+
+    // Fetch positions
+    console.log(`Fetching positions for ${allUsers.length} users...`)
+    const active = await fetchPositions(allUsers)
+    const top = active.length > 0 ? await fetchAssetBreakdown(active.slice(0, 100)) : []
+    const rest = active.slice(100).map((u) => ({ ...u, collateralAssets: [], borrowAssets: [] }))
+
+    const response = {
+      positions: [...top, ...rest],
+      totalDiscovered: allUsers.length,
+      totalActive: active.length,
+      totalCollateral: active.reduce((s, u) => s + u.totalCollateral, 0),
+      totalDebt: active.reduce((s, u) => s + u.totalDebt, 0),
+    }
+
+    memPositions = response
+    memPositionsTime = Date.now()
+    writeJSON(POSITION_CACHE_FILE, { ...response, timestamp: Date.now() })
+
+    // Start full background scan
+    backgroundFullScan().catch(() => {})
+
+    return paginate(response)
+  } catch (error: any) {
+    console.error("Wallets API error:", error.shortMessage || error.message)
+    return NextResponse.json(
+      { error: "Failed to fetch wallet data", details: error.message },
+      { status: 500 }
+    )
+  } finally {
+    quickScanRunning = false
+  }
+}
