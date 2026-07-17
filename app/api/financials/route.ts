@@ -6,28 +6,48 @@ import {
   poolAddressesProviderAbi,
   poolDataProviderAbi,
   oracleAbi,
+  USDS_TOKEN,
+  SPARK_PROXY,
 } from "@/lib/contracts"
 import { type Address, parseAbiItem } from "viem"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import { join } from "path"
+// Bundled baseline snapshot for Distribution Rewards. Vercel serverless
+// filesystems are ephemeral, so we ship the last-known scan result at build
+// time. Refresh with the same npm script that regenerates the wallets baseline.
+import distributionRewardsBaseline from "@/data/distribution-rewards-baseline.json"
 
 export const dynamic = "force-dynamic"
+// Vercel serverless timeout in seconds. 60s covers cold-start scans of the
+// flashloan, liquidation, and distribution-reward event logs.
+export const maxDuration = 60
 
 const FLASH_CACHE_FILE = join(process.cwd(), ".flashloan-cache.json")
 const LIQ_CACHE_FILE = join(process.cwd(), ".liquidation-cache.json")
+const DIST_CACHE_FILE = join(process.cwd(), ".distribution-rewards-cache.json")
 const SCAN_CHUNK = 10000n
+// Distribution Rewards launched with the Sept 18, 2025 spell (~block 23,300,000).
+// Scan a few weeks before that to catch any pre-launch pilot mints too.
+const DIST_MIN_BLOCK = 23_200_000n
+// Reasonable per-settlement bounds. Sky ecosystem mints (SLL keeper, PSM top-ups)
+// are usually well outside this band ($20M-$400M keeper mints, tiny dust below).
+const DIST_MIN_USDS = 250_000
+const DIST_MAX_USDS = 15_000_000
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 let resultCache: any = null
 let resultCacheTime = 0
 const CACHE_TTL = 1800_000 // 30 min
 let scanningInProgress = false
+let distScanningInProgress = false
 
 // ---------- DefiLlama helpers ----------
 async function fetchDefiLlamaFees(
+  slug: string,
   dataType: string
 ): Promise<Array<[number, number]>> {
   const res = await fetch(
-    `https://api.llama.fi/summary/fees/sparklend?dataType=${dataType}`,
+    `https://api.llama.fi/summary/fees/${slug}?dataType=${dataType}`,
     { cache: "no-store" }
   )
   if (!res.ok) return []
@@ -173,6 +193,107 @@ async function scanFlashLoansBackground() {
   }
 }
 
+// ---------- Distribution Rewards scanning ----------
+// Sky pays Spark monthly Distribution Rewards as a USDS mint from MCD_PAUSE_PROXY
+// (via executive spell Cast) to SPARK_PROXY. Detected as USDS Transfer(0x0 -> SPARK_PROXY)
+// where the transaction's tx.from is the Pause Proxy.
+interface DistEvent {
+  amount: string // wei, 18 decimals
+  blockNumber: string
+  timestamp: number // unix seconds
+  txHash: string
+}
+
+function loadDistCache(): { lastBlock: string; events: DistEvent[] } {
+  if (existsSync(DIST_CACHE_FILE)) {
+    try {
+      return JSON.parse(readFileSync(DIST_CACHE_FILE, "utf-8"))
+    } catch {}
+  }
+  // Fallback to build-bundled baseline for Vercel cold starts.
+  return distributionRewardsBaseline as { lastBlock: string; events: DistEvent[] }
+}
+
+async function scanDistributionRewardsBackground() {
+  if (distScanningInProgress) return
+  distScanningInProgress = true
+
+  try {
+    const cache = loadDistCache()
+    const currentBlock = await client.getBlockNumber()
+    const lastScanned = BigInt(cache.lastBlock || "0")
+    const startBlock =
+      lastScanned > DIST_MIN_BLOCK ? lastScanned + 1n : DIST_MIN_BLOCK
+
+    if (startBlock >= currentBlock) {
+      distScanningInProgress = false
+      return
+    }
+
+    const transferEvent = parseAbiItem(
+      "event Transfer(address indexed from, address indexed to, uint256 value)"
+    )
+
+    // Single getLogs call for the whole range. mevblocker (first in fallback)
+    // accepts multi-million-block queries and Distribution Reward mints are
+    // sparse (2-3/month), so there's nothing to chunk.
+    const logs = await client.getLogs({
+      address: USDS_TOKEN,
+      event: transferEvent,
+      args: {
+        to: SPARK_PROXY,
+        // Distribution Rewards are USDS *mints* (from = 0x0), executed
+        // internally by the Sky executive spell via the Pause Proxy.
+        // Non-mint transfers (from an SLL keeper contract etc.) are not rewards.
+        from: ZERO_ADDRESS,
+      },
+      fromBlock: startBlock,
+      toBlock: currentBlock,
+    })
+
+    // Enrich each candidate with a block timestamp for calendar placement, and
+    // apply the amount-bounds heuristic to reject SLL keeper mints (which are
+    // orders of magnitude larger) and dust operations.
+    const enriched = await Promise.all(
+      logs.map(async (log) => {
+        try {
+          const amountWei = BigInt((log.args as any).value)
+          const amountUsd = Number(amountWei) / 1e18
+          if (amountUsd < DIST_MIN_USDS || amountUsd > DIST_MAX_USDS) {
+            return null
+          }
+          const block = await client.getBlock({ blockNumber: log.blockNumber! })
+          return {
+            amount: amountWei.toString(),
+            blockNumber: log.blockNumber!.toString(),
+            timestamp: Number(block.timestamp),
+            txHash: log.transactionHash!,
+          } as DistEvent
+        } catch {
+          return null
+        }
+      })
+    )
+
+    const newEvents = enriched.filter((e): e is DistEvent => e !== null)
+    const allEvents = [...cache.events, ...newEvents]
+
+    try {
+      writeFileSync(
+        DIST_CACHE_FILE,
+        JSON.stringify({
+          lastBlock: currentBlock.toString(),
+          events: allEvents,
+        })
+      )
+    } catch {}
+  } catch (err: any) {
+    console.error("Dist scan error:", err.message?.slice(0, 100))
+  } finally {
+    distScanningInProgress = false
+  }
+}
+
 // ---------- Build daily fee breakdown ----------
 function dayTs(ts: number): number {
   const d = new Date(ts * 1000)
@@ -202,6 +323,58 @@ function computeFlashFees(
 
     map.set(key, (map.get(key) || 0) + premiumUSD)
   }
+  return map
+}
+
+// Amortize each monthly Distribution Reward payment across the days between
+// the prior payment (or Sept 1, 2025 for the first payment) and this payment's
+// day. For days after the latest payment, carry forward at the trailing daily
+// rate so the current-month bar isn't visually empty.
+function computeDistributionRewards(): Map<number, number> {
+  const map = new Map<number, number>()
+  const cache = loadDistCache()
+  if (cache.events.length === 0) return map
+
+  // Sort by timestamp ascending
+  const events = [...cache.events].sort((a, b) => a.timestamp - b.timestamp)
+
+  // Distribution Rewards launched Sept 2025 (first spell Sept 18, 2025). Use
+  // Sept 1, 2025 as the amortization anchor so the first payment spreads over
+  // its full "for" period rather than a single-day spike.
+  const ANCHOR_TS = Math.floor(new Date("2025-09-01T00:00:00Z").getTime() / 1000)
+  let prevBoundary = ANCHOR_TS
+  let lastRate = 0 // USD per day, used to carry forward past the latest payment
+
+  for (const ev of events) {
+    // USDS has 18 decimals; ~$1.00 by peg. Using 1.0 avoids depending on a
+    // spot price API for a stablecoin.
+    const usdAmount = Number(BigInt(ev.amount)) / 1e18
+    if (usdAmount <= 0) continue
+
+    // Each payment covers (prevBoundary, thisPayment] — exclusive of prev day,
+    // inclusive of payment day. This makes windows tile without gaps or overlap.
+    const startDay = dayTs(prevBoundary) + 86400
+    const endDay = dayTs(ev.timestamp)
+    const dayCount = Math.max(1, Math.round((endDay - startDay) / 86400) + 1)
+    const perDay = usdAmount / dayCount
+
+    for (let d = startDay; d <= endDay; d += 86400) {
+      map.set(d, (map.get(d) || 0) + perDay)
+    }
+
+    lastRate = perDay
+    prevBoundary = ev.timestamp
+  }
+
+  // Forward-fill from the day after the latest payment up to today at the
+  // trailing daily rate. Honest note: this is an estimate — actual accrual
+  // won't be known until the next monthly settlement.
+  const today = dayTs(Math.floor(Date.now() / 1000))
+  const startFill = dayTs(prevBoundary) + 86400
+  for (let d = startFill; d <= today; d += 86400) {
+    map.set(d, (map.get(d) || 0) + lastRate)
+  }
+
   return map
 }
 
@@ -258,15 +431,19 @@ export async function GET() {
   }
 
   try {
-    // Kick off background flash scan (non-blocking)
+    // Kick off background scans (non-blocking)
     scanFlashLoansBackground()
+    scanDistributionRewardsBackground()
 
     // Fetch DefiLlama data + token info (the fast stuff)
-    const [feesData, revenueData, supplySideData, tokenInfo] =
+    // sparklend = the lending pool itself (net interest income + flash + liq)
+    // spark-liquidity-layer = ALM Proxy deployments into Morpho/Aave/Ethena/Curve/etc (yield - funding cost)
+    const [feesData, revenueData, supplySideData, sllRevenueData, tokenInfo] =
       await Promise.all([
-        fetchDefiLlamaFees("dailyFees"),
-        fetchDefiLlamaFees("dailyRevenue"),
-        fetchDefiLlamaFees("dailySupplySideRevenue"),
+        fetchDefiLlamaFees("sparklend", "dailyFees"),
+        fetchDefiLlamaFees("sparklend", "dailyRevenue"),
+        fetchDefiLlamaFees("sparklend", "dailySupplySideRevenue"),
+        fetchDefiLlamaFees("spark-liquidity-layer", "dailyRevenue"),
         getTokenInfo(),
       ])
 
@@ -284,12 +461,15 @@ export async function GET() {
       tokenInfo.decimalsMap,
       priceMap
     )
+    const dailyDistributionRewards = computeDistributionRewards()
 
     // Build lookup maps
     const revenueMap = new Map<number, number>()
     for (const [ts, val] of revenueData) revenueMap.set(ts, val)
     const supplyMap = new Map<number, number>()
     for (const [ts, val] of supplySideData) supplyMap.set(ts, val)
+    const sllMap = new Map<number, number>()
+    for (const [ts, val] of sllRevenueData) sllMap.set(ts, val)
 
     // ---- Estimate historical fee ratios ----
     // For days where we have on-chain data, compute the ratio of
@@ -326,6 +506,7 @@ export async function GET() {
     const daily = feesData.map(([timestamp, totalFees]) => {
       const revenue = revenueMap.get(timestamp) || 0
       const supplySideRevenue = supplyMap.get(timestamp) || 0
+      const sllRevenue = sllMap.get(timestamp) || 0
 
       // Use on-chain data where available, otherwise estimate from ratios
       const hasOnChainFlash = dailyFlashFeesOnChain.has(timestamp)
@@ -357,6 +538,8 @@ export async function GET() {
         netInterestIncome,
         flashloanFees,
         liquidationFees,
+        sllRevenue,
+        distributionRewards: dailyDistributionRewards.get(timestamp) || 0,
       }
     })
 

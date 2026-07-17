@@ -1,14 +1,16 @@
 export function formatUSD(value: number): string {
-  if (value >= 1_000_000_000) {
-    return `$${(value / 1_000_000_000).toFixed(2)}B`
+  const sign = value < 0 ? "-" : ""
+  const abs = Math.abs(value)
+  if (abs >= 1_000_000_000) {
+    return `${sign}$${(abs / 1_000_000_000).toFixed(2)}B`
   }
-  if (value >= 1_000_000) {
-    return `$${(value / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000_000) {
+    return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
   }
-  if (value >= 1_000) {
-    return `$${(value / 1_000).toFixed(2)}K`
+  if (abs >= 1_000) {
+    return `${sign}$${(abs / 1_000).toFixed(2)}K`
   }
-  return `$${value.toFixed(2)}`
+  return `${sign}$${abs.toFixed(2)}`
 }
 
 export function formatUSDFull(value: number): string {

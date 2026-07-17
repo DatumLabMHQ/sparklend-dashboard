@@ -10,8 +10,18 @@ import {
 import { type Address, parseAbiItem } from "viem"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import { join } from "path"
+// Bundled baseline snapshots. On Vercel the runtime filesystem is ephemeral,
+// so file caches vanish on every cold start. These imports get traced into
+// the serverless function bundle at build time so /wallets always has data
+// to render even on a cold container. Refresh with `npm run refresh-caches`.
+import positionsBaseline from "@/data/wallet-positions-baseline.json"
+import usersBaseline from "@/data/wallet-users-baseline.json"
 
 export const dynamic = "force-dynamic"
+// Vercel serverless timeout in seconds. 60s is the Vercel Pro default ceiling
+// (Hobby caps at 10s, Enterprise at 900s). Scans are chunked and cached so
+// most invocations return fast; this budget just covers the cold-start rebuild.
+export const maxDuration = 60
 
 const DEPLOYMENT_BLOCK = 16_848_000n
 const CHUNK_SIZE = 50_000n
@@ -42,6 +52,16 @@ function readJSON(path: string): any {
     console.error(`Read ${path} failed:`, e.message)
   }
   return null
+}
+
+// Fall back to the build-bundled baseline when the ephemeral fs cache is
+// missing. Cast because JSON imports are typed as their literal structure
+// but we treat them as our cache shape.
+function readPositionsCache(): any {
+  return readJSON(POSITION_CACHE_FILE) || (positionsBaseline as any)
+}
+function readUsersCache(): any {
+  return readJSON(USER_CACHE_FILE) || (usersBaseline as any)
 }
 
 function writeJSON(path: string, data: any) {
@@ -105,7 +125,7 @@ async function scanRange(
     chunks++
 
     if (chunks % saveEvery === 0) {
-      const cached = readJSON(USER_CACHE_FILE) || {}
+      const cached = readUsersCache() || {}
       // Merge with any existing users
       const merged = new Set([...(cached.users || []), ...userSet])
       writeJSON(USER_CACHE_FILE, {
@@ -213,7 +233,7 @@ async function backgroundFullScan() {
   bgScanRunning = true
   try {
     const currentBlock = await client.getBlockNumber()
-    const cached = readJSON(USER_CACHE_FILE)
+    const cached = readUsersCache()
     const existingUsers = new Set<string>(cached?.users || [])
     const progress = cached?.deploymentProgress ? BigInt(cached.deploymentProgress) : DEPLOYMENT_BLOCK - 1n
     const recentStart = cached?.recentScanStart ? BigInt(cached.recentScanStart) : currentBlock
@@ -278,12 +298,19 @@ export async function GET(request: Request) {
     return paginate(memPositions)
   }
 
-  // 2. File cache (1 hour)
-  const fileCached = readJSON(POSITION_CACHE_FILE)
-  if (fileCached?.positions && Date.now() - fileCached.timestamp < 3_600_000) {
+  // 2. File cache — serve any prior snapshot immediately (even if stale),
+  //    and kick off a background refresh. Empty page is worse than a slightly
+  //    stale one; the client can retry to pull in newer data. On Vercel the
+  //    fs cache is ephemeral so this falls back to the build-bundled baseline.
+  const fileCached = readPositionsCache()
+  if (fileCached?.positions?.length > 0) {
+    const ageMs = Date.now() - (fileCached.timestamp || 0)
+    const isFresh = ageMs < 3_600_000
     restoreInfinity(fileCached.positions)
-    memPositions = fileCached
-    memPositionsTime = Date.now()
+    if (isFresh) {
+      memPositions = fileCached
+      memPositionsTime = Date.now()
+    }
     backgroundFullScan().catch(() => {})
     return paginate(fileCached)
   }
@@ -306,7 +333,7 @@ export async function GET(request: Request) {
 
   quickScanRunning = true
   try {
-    let userCache = readJSON(USER_CACHE_FILE)
+    let userCache = readUsersCache()
     let allUsers: string[] = userCache?.users || []
 
     if (allUsers.length === 0) {

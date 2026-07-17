@@ -39,22 +39,25 @@ export default function FinancialsPage() {
       (d: any) => d.date >= cutoff60 && d.date < cutoff30
     )
 
-    const totalFees30d = recent.reduce((s: number, d: any) => s + d.totalFees, 0)
-    const revenue30d = recent.reduce((s: number, d: any) => s + d.revenue, 0)
-    const supplySide30d = recent.reduce((s: number, d: any) => s + d.supplySideRevenue, 0)
+    const sparkLendRevenue30d = recent.reduce((s: number, d: any) => s + d.revenue, 0)
+    const sllRevenue30d = recent.reduce((s: number, d: any) => s + (d.sllRevenue || 0), 0)
+    const distRewards30d = recent.reduce((s: number, d: any) => s + (d.distributionRewards || 0), 0)
+    const totalSparkRevenue30d = sparkLendRevenue30d + sllRevenue30d + distRewards30d
 
-    const totalFeesPrior = prior.reduce((s: number, d: any) => s + d.totalFees, 0)
-    const revenuePrior = prior.reduce((s: number, d: any) => s + d.revenue, 0)
-    const supplySidePrior = prior.reduce((s: number, d: any) => s + d.supplySideRevenue, 0)
+    const sparkLendPrior = prior.reduce((s: number, d: any) => s + d.revenue, 0)
+    const sllPrior = prior.reduce((s: number, d: any) => s + (d.sllRevenue || 0), 0)
+    const distPrior = prior.reduce((s: number, d: any) => s + (d.distributionRewards || 0), 0)
+    const totalSparkPrior = sparkLendPrior + sllPrior + distPrior
 
     return {
-      totalFees30d,
-      revenue30d,
-      supplySide30d,
-      allTimeFees: data.daily.reduce((s: number, d: any) => s + d.totalFees, 0),
-      totalFeesChange: totalFeesPrior > 0 ? totalFees30d - totalFeesPrior : 0,
-      revenueChange: revenuePrior > 0 ? revenue30d - revenuePrior : 0,
-      supplySideChange: supplySidePrior > 0 ? supplySide30d - supplySidePrior : 0,
+      totalSparkRevenue30d,
+      sparkLendRevenue30d,
+      sllRevenue30d,
+      distRewards30d,
+      totalSparkChange: totalSparkPrior > 0 ? totalSparkRevenue30d - totalSparkPrior : 0,
+      sparkLendChange: sparkLendPrior > 0 ? sparkLendRevenue30d - sparkLendPrior : 0,
+      sllChange: sllPrior !== 0 ? sllRevenue30d - sllPrior : 0,
+      distChange: distPrior !== 0 ? distRewards30d - distPrior : 0,
     }
   }, [data])
 
@@ -86,10 +89,10 @@ export default function FinancialsPage() {
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: "Total Fees (30d)", value: formatUSD(summary.totalFees30d), change: summary.totalFeesChange, color: "#FF6B35" },
-            { label: "Protocol Revenue (30d)", value: formatUSD(summary.revenue30d), change: summary.revenueChange, color: "#22c55e" },
-            { label: "Lender Income (30d)", value: formatUSD(summary.supplySide30d), change: summary.supplySideChange, color: "#8b5cf6" },
-            { label: "All-Time Fees", value: formatUSD(summary.allTimeFees), change: null, color: "#FF6B35" },
+            { label: "Total Spark Revenue (30d)", value: formatUSD(summary.totalSparkRevenue30d), change: summary.totalSparkChange, color: "#22c55e" },
+            { label: "SparkLend Revenue (30d)", value: formatUSD(summary.sparkLendRevenue30d), change: summary.sparkLendChange, color: "#3b82f6" },
+            { label: "SLL Revenue (30d)", value: formatUSD(summary.sllRevenue30d), change: summary.sllChange, color: "#f59e0b" },
+            { label: "Distribution Rewards (30d)", value: formatUSD(summary.distRewards30d), change: summary.distChange, color: "#a855f7" },
           ].map((card) => (
             <div key={card.label} className="tui-card bg-card-bg border border-card-border rounded p-4 relative overflow-hidden">
               <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ backgroundColor: card.color }} />

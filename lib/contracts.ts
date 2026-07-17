@@ -2,12 +2,16 @@ import { createPublicClient, http, fallback, type Address } from "viem"
 import { mainnet } from "viem/chains"
 
 // --- viem client with fallback RPCs ---
+// mevblocker is first because it accepts wide eth_getLogs ranges (5M blocks in one call)
+// which the other public RPCs reject. llamarpc/ankr/publicnode kept as fallback for
+// cheaper reads (blockNumber, balances, multicall).
 export const client = createPublicClient({
   chain: mainnet,
   transport: fallback([
+    http("https://rpc.mevblocker.io"),
     http("https://eth.llamarpc.com"),
+    http("https://ethereum.publicnode.com"),
     http("https://rpc.ankr.com/eth"),
-    http("https://ethereum-rpc.publicnode.com"),
   ]),
 })
 
@@ -16,6 +20,16 @@ export const POOL_ADDRESSES_PROVIDER: Address =
   "0x02C3eA4e34C0cBd694D2adFa2c690EECbC1793eE"
 export const POOL: Address =
   "0xC13e21B648A5Ee794902342038FF3aDAB66BE987"
+
+// --- Sky/Spark distribution reward addresses ---
+// Distribution Rewards are paid as monthly USDS mints from Sky's Pause Proxy
+// (via executive spell Cast) into Spark's governance proxy.
+export const USDS_TOKEN: Address =
+  "0xdC035D45d973E3EC169d2276DDab16f1e407384F"
+export const MCD_PAUSE_PROXY: Address =
+  "0xbE286431454714F511008713973d3B053A2d38f3"
+export const SPARK_PROXY: Address =
+  "0x3300f198988e4C9C63F75dF86De36421f06af8c4"
 
 // --- ABI fragments (minimal, only what we call) ---
 
