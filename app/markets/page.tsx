@@ -3,7 +3,7 @@
 import { MarketsTable } from "@/components/markets/markets-table"
 import { MetricCard } from "@/components/metric-card"
 import { ProtocolAreaChart } from "@/components/protocol-area-chart"
-import { CollateralConcentration } from "@/components/collateral-concentration"
+import { AssetMixDonut } from "@/components/asset-mix-donut"
 import { WstEthPipeline } from "@/components/wsteth-pipeline"
 import { DepositsBorrowsSankey } from "@/components/deposits-borrows-sankey"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
@@ -152,6 +152,29 @@ export default function SparkLendPage() {
     totalCollateralByToken[k] = (v as number) + (latestBorrow[k] || 0)
   }
 
+  // Daily snapshots aligned by date for the two mix donuts.
+  // Collateral snapshot per day = liquidity[token] + borrowed[token].
+  const collateralSnapshots = (() => {
+    if (!sparklendData) return []
+    const borrowByDate = new Map<number, Record<string, number>>()
+    for (const s of sparklendData.borrow.tokensInUsd || []) {
+      borrowByDate.set(s.date, s.tokens)
+    }
+    return (sparklendData.supply.tokensInUsd || []).map((s: any) => {
+      const b = borrowByDate.get(s.date) || {}
+      const merged: Record<string, number> = {}
+      for (const [k, v] of Object.entries(s.tokens as Record<string, number>)) {
+        merged[k] = (v as number) + (b[k] || 0)
+      }
+      // Include borrow-only tokens too
+      for (const [k, v] of Object.entries(b as Record<string, number>)) {
+        if (merged[k] == null) merged[k] = v || 0
+      }
+      return { date: s.date, tokens: merged }
+    })
+  })()
+  const borrowSnapshots = sparklendData?.borrow.tokensInUsd || []
+
   // Aggregate metrics for top stat cards
   const currentLiquidity = sparklendData?.currentChainTvls?.["Ethereum"] || 0
   const currentBorrow = sparklendData?.currentChainTvls?.["Ethereum-borrowed"] || 0
@@ -252,10 +275,41 @@ export default function SparkLendPage() {
 
       {sparklendData && (
         <>
-          <CollateralConcentration
-            supplyTokens={totalCollateralByToken}
-            borrowTokens={latestBorrow}
-          />
+          {/* Collateral + Borrow mix in TWO separate panels, each with its
+              own period filter (Current / W / M / Q). */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <AssetMixDonut
+              title="Collateral Mix"
+              subtitle="Supply-side value by asset — total supplied to SparkLend"
+              snapshots={collateralSnapshots}
+              accentToken="wstETH"
+              totalLabel="Supply / Collateral"
+              methodology={
+                <>
+                  Composition of what&apos;s deposited into SparkLend, i.e. supply-side value
+                  per asset. wstETH highlighted in Spark orange because it has been the dominant
+                  collateral asset for most of the pool&apos;s life. Switch to W / M / Q to view
+                  the trailing 7 / 30 / 90 day average — a spike in a single day won&apos;t
+                  dominate the averaged view.
+                </>
+              }
+            />
+            <AssetMixDonut
+              title="Borrow Mix"
+              subtitle="Outstanding loans by asset"
+              snapshots={borrowSnapshots}
+              accentToken="WETH"
+              totalLabel="Borrow"
+              methodology={
+                <>
+                  Composition of what&apos;s borrowed from SparkLend. WETH highlighted because
+                  it is the dominant borrow asset, completing the wstETH → WETH leverage-stake
+                  loop that is SparkLend&apos;s signature flow. Period toggle shows current
+                  vs trailing-period average.
+                </>
+              }
+            />
+          </div>
           <WstEthPipeline
             supplyTokens={sparklendData.supply.tokensInUsd}
             borrowTokens={sparklendData.borrow.tokensInUsd}

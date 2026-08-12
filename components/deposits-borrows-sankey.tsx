@@ -174,14 +174,21 @@ export function DepositsBorrowsSankey({ supplyTokens, borrowTokens }: Props) {
             <Tooltip
               content={({ active, payload }: any) => {
                 if (!active || !payload?.length) return null
-                const p = payload[0].payload
-                // Link hover: payload has source + target (either indices or node objects).
-                const isLink = p?.source != null && p?.target != null && p?.value != null
+                // Recharts Sankey passes the top-level `item.name` for nodes;
+                // the inner `item.payload` is the raw datum we supplied (with
+                // `source`/`target` on links). Mirror the Fluid pattern.
+                const item = payload[0]
+                const pl = item?.payload ?? {}
+                const isLink = pl?.source != null && pl?.target != null
                 if (isLink) {
                   const srcName =
-                    typeof p.source === "number" ? nodes[p.source]?.name : p.source?.name
+                    typeof pl.source === "number"
+                      ? nodes[pl.source]?.name
+                      : pl.source?.name
                   const tgtName =
-                    typeof p.target === "number" ? nodes[p.target]?.name : p.target?.name
+                    typeof pl.target === "number"
+                      ? nodes[pl.target]?.name
+                      : pl.target?.name
                   return (
                     <div className="custom-tooltip min-w-[220px]">
                       <div className="text-xs text-text-secondary mb-1">
@@ -190,15 +197,14 @@ export function DepositsBorrowsSankey({ supplyTokens, borrowTokens }: Props) {
                       <div className="flex justify-between text-xs">
                         <span className="text-text-secondary">Flow</span>
                         <span className="font-semibold text-text-primary">
-                          {formatUSD(p.value)}
+                          {formatUSD(pl.value ?? item?.value ?? 0)}
                         </span>
                       </div>
                     </div>
                   )
                 }
-                // Node hover: p.name is the node label. p.value is not always populated by
-                // Recharts for computed nodes — fall back to summing links touching this node.
-                const nodeName = p?.name || "(unknown)"
+                // Node hover: prefer Recharts' item.name, fall back to pl.name.
+                const nodeName = item?.name ?? pl?.name ?? "(unknown)"
                 const nodeIdx = nodes.findIndex((n) => n.name === nodeName)
                 const inflow = links
                   .filter((l) => l.target === nodeIdx)
@@ -206,9 +212,10 @@ export function DepositsBorrowsSankey({ supplyTokens, borrowTokens }: Props) {
                 const outflow = links
                   .filter((l) => l.source === nodeIdx)
                   .reduce((s, l) => s + l.value, 0)
+                const rawVal = pl?.value ?? item?.value
                 const val =
-                  typeof p?.value === "number" && !Number.isNaN(p.value)
-                    ? p.value
+                  typeof rawVal === "number" && !Number.isNaN(rawVal) && rawVal > 0
+                    ? rawVal
                     : Math.max(inflow, outflow)
                 return (
                   <div className="custom-tooltip min-w-[180px]">
