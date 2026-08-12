@@ -36,7 +36,7 @@ interface Point {
 
 export function DistRewardsShareChart({ daily }: { daily: Point[] }) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("W")
+  const [period, setPeriod] = useState<Period>("M")
 
   // Compute distribution rewards share per day, then bucket into periods.
   const withShare = useMemo(

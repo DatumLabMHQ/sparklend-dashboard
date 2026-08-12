@@ -32,7 +32,7 @@ function ChartTooltip({ active, payload, label, title }: any) {
 
 export function FeeChart({ title, subtitle, daily, dataKey, color, methodology }: FeeChartProps) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("W")
+  const [period, setPeriod] = useState<Period>("M")
 
   const chartData = useMemo(
     () => aggregateData(daily, period, [dataKey]),

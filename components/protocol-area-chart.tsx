@@ -50,14 +50,22 @@ function CustomTooltip({
     0
   )
 
+  // Cap the visible token list so the tooltip never exceeds the chart body
+  // height (300px) - otherwise the Total row gets clipped by .tui-panel's
+  // overflow:hidden. Anything past the cap gets folded into "+ N more".
+  const MAX_TOKENS_IN_TOOLTIP = 8
+  const shown = tokenValues.slice(0, MAX_TOKENS_IN_TOOLTIP)
+  const rest = tokenValues.slice(MAX_TOKENS_IN_TOOLTIP)
+  const restSum = rest.reduce((s: number, t: { value: number }) => s + t.value, 0)
+
   return (
     <div className="custom-tooltip min-w-[220px]">
       <p className="text-xs text-text-muted mb-2">
         {formatDateFull(dataPoint.timestamp)}
       </p>
-      <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
-        {tokenValues.map(
-          (t: { token: string; value: number }, i: number) => (
+      <div className="space-y-1">
+        {shown.map(
+          (t: { token: string; value: number }) => (
             <div key={t.token} className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <span
@@ -68,16 +76,22 @@ function CustomTooltip({
                   {getTokenName(t.token)}
                 </span>
               </div>
-              <span className="text-xs font-medium text-text-primary">
+              <span className="text-xs font-medium text-text-primary tabular-nums">
                 {formatUSD(t.value)}
               </span>
             </div>
           )
         )}
+        {rest.length > 0 && (
+          <div className="flex items-center justify-between gap-4 text-text-muted">
+            <span className="text-[11px]">+ {rest.length} more</span>
+            <span className="text-[11px] tabular-nums">{formatUSD(restSum)}</span>
+          </div>
+        )}
       </div>
       <div className="border-t border-card-border mt-2 pt-2 flex items-center justify-between">
         <span className="text-xs font-medium text-text-secondary">Total</span>
-        <span className="text-sm font-semibold text-text-primary">
+        <span className="text-sm font-semibold text-text-primary tabular-nums">
           {formatUSD(total)}
         </span>
       </div>

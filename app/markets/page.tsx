@@ -1,6 +1,7 @@
 "use client"
 
 import { MarketsTable } from "@/components/markets/markets-table"
+import { MetricCard } from "@/components/metric-card"
 import { ProtocolAreaChart } from "@/components/protocol-area-chart"
 import { CollateralConcentration } from "@/components/collateral-concentration"
 import { WstEthPipeline } from "@/components/wsteth-pipeline"
@@ -12,12 +13,12 @@ function LoadingSkeleton() {
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-6 animate-pulse space-y-4">
       <div className="h-5 w-24 bg-card-bg rounded" />
-      <div className="bg-card-bg border border-card-border rounded-lg">
-        <div className="h-10 border-b border-card-border" />
-        {Array.from({ length: 10 }).map((_, i) => (
-          <div key={i} className="h-14 border-b border-card-border/50" />
+      <div className="grid grid-cols-3 gap-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-24 bg-card-bg border border-card-border rounded" />
         ))}
       </div>
+      <div className="h-[300px] bg-card-bg border border-card-border rounded" />
     </div>
   )
 }
@@ -96,6 +97,19 @@ function computeSupply(
   return { data, allTokens }
 }
 
+function get24hChange(snapshots: Array<{ date: number; totalLiquidityUSD: number }>): number {
+  if (snapshots.length < 2) return 0
+  const latest = snapshots[snapshots.length - 1]
+  const oneDayAgo = latest.date - 86400
+  let closest = snapshots[0]
+  for (const s of snapshots) {
+    if (Math.abs(s.date - oneDayAgo) < Math.abs(closest.date - oneDayAgo)) {
+      closest = s
+    }
+  }
+  return latest.totalLiquidityUSD - closest.totalLiquidityUSD
+}
+
 export default function SparkLendPage() {
   const { data: rawData, loading, error } = useCachedFetch("/api/markets", { ttl: 2 * 60_000 })
   const { data: sparklendData } = useCachedFetch<any>("/api/sparklend", { ttl: 5 * 60_000 })
@@ -119,7 +133,7 @@ export default function SparkLendPage() {
     )
   }
 
-  // Derived: per-token asset breakdowns (only when sparklendData is loaded)
+  // Derived: per-token asset breakdowns
   const supply30 = sparklendData
     ? computeSupply(sparklendData.supply.tokensInUsd, sparklendData.borrow.tokensInUsd, 30)
     : null
@@ -131,12 +145,22 @@ export default function SparkLendPage() {
   const liq30 = sparklendData ? processTokenSnapshots(sparklendData.supply.tokensInUsd, 30) : null
   const liq90 = sparklendData ? processTokenSnapshots(sparklendData.supply.tokensInUsd, 90) : null
 
-  const latestSupply = sparklendData?.supply.tokensInUsd?.at(-1)?.tokens || {}
-  const latestBorrow = sparklendData?.borrow.tokensInUsd?.at(-1)?.tokens || {}
-  const collateralTokens: Record<string, number> = {}
+  const latestSupply = (sparklendData?.supply.tokensInUsd?.at(-1)?.tokens || {}) as Record<string, number>
+  const latestBorrow = (sparklendData?.borrow.tokensInUsd?.at(-1)?.tokens || {}) as Record<string, number>
+  const totalCollateralByToken: Record<string, number> = {}
   for (const [k, v] of Object.entries(latestSupply)) {
-    collateralTokens[k] = (v as number) + ((latestBorrow[k] as number) || 0)
+    totalCollateralByToken[k] = (v as number) + (latestBorrow[k] || 0)
   }
+
+  // Aggregate metrics for top stat cards
+  const currentLiquidity = sparklendData?.currentChainTvls?.["Ethereum"] || 0
+  const currentBorrow = sparklendData?.currentChainTvls?.["Ethereum-borrowed"] || 0
+  const currentSupply = currentLiquidity + currentBorrow
+  const supplyChange = sparklendData
+    ? get24hChange(sparklendData.supply.tvl) + get24hChange(sparklendData.borrow.tvl)
+    : 0
+  const borrowChange = sparklendData ? get24hChange(sparklendData.borrow.tvl) : 0
+  const liquidityChange = sparklendData ? get24hChange(sparklendData.supply.tvl) : 0
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
@@ -145,15 +169,51 @@ export default function SparkLendPage() {
         <div className="flex-1 h-px bg-card-border" />
       </div>
 
-      {/* Markets table — per-market rates, TVL, utilization */}
-      <MarketsTable data={marketsData} />
+      {/* Metric cards: Total Supply, Total Borrow, TVL */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <MetricCard
+          label="Total Supply"
+          value={currentSupply}
+          change24h={supplyChange}
+          accentColor="#22c55e"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+              <polyline points="16 7 22 7 22 13" />
+            </svg>
+          }
+        />
+        <MetricCard
+          label="Total Borrows"
+          value={currentBorrow}
+          change24h={borrowChange}
+          accentColor="#FF6B35"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
+              <polyline points="16 17 22 17 22 11" />
+            </svg>
+          }
+        />
+        <MetricCard
+          label="Total Value Locked"
+          value={currentLiquidity}
+          change24h={liquidityChange}
+          accentColor="#8b5cf6"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+          }
+        />
+      </div>
 
       {/* Section divider */}
       <div className="tui-divider-labeled">
         <span className="tui-divider-label">Asset-level Breakdown</span>
       </div>
 
-      {/* Per-asset supply / borrow / liquidity charts */}
+      {/* Per-asset supply / borrow charts (side-by-side) + available liquidity (full width) */}
       {supply30 && supply90 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ProtocolAreaChart
@@ -174,7 +234,6 @@ export default function SparkLendPage() {
           />
         </div>
       )}
-
       {liq30 && liq90 && (
         <ProtocolAreaChart
           title="Available Liquidity"
@@ -191,23 +250,30 @@ export default function SparkLendPage() {
         <span className="tui-divider-label">Concentration &amp; Flows</span>
       </div>
 
-      {/* Collateral concentration + wstETH loop pipeline */}
       {sparklendData && (
         <>
           <CollateralConcentration
-            tokens={collateralTokens}
-            borrowTokens={latestBorrow as Record<string, number>}
+            supplyTokens={totalCollateralByToken}
+            borrowTokens={latestBorrow}
           />
           <WstEthPipeline
             supplyTokens={sparklendData.supply.tokensInUsd}
             borrowTokens={sparklendData.borrow.tokensInUsd}
           />
           <DepositsBorrowsSankey
-            supplyTokens={collateralTokens}
-            borrowTokens={latestBorrow as Record<string, number>}
+            supplyTokens={totalCollateralByToken}
+            borrowTokens={latestBorrow}
           />
         </>
       )}
+
+      {/* Section divider */}
+      <div className="tui-divider-labeled">
+        <span className="tui-divider-label">Markets</span>
+      </div>
+
+      {/* Markets table at bottom - per-market rates, TVL, utilization */}
+      <MarketsTable data={marketsData} />
     </div>
   )
 }

@@ -175,28 +175,56 @@ export function DepositsBorrowsSankey({ supplyTokens, borrowTokens }: Props) {
               content={({ active, payload }: any) => {
                 if (!active || !payload?.length) return null
                 const p = payload[0].payload
-                if (p.source !== undefined && p.target !== undefined) {
-                  const src = nodes[p.source]
-                  const tgt = nodes[p.target]
+                // Link hover: payload has source + target (either indices or node objects).
+                const isLink = p?.source != null && p?.target != null && p?.value != null
+                if (isLink) {
+                  const srcName =
+                    typeof p.source === "number" ? nodes[p.source]?.name : p.source?.name
+                  const tgtName =
+                    typeof p.target === "number" ? nodes[p.target]?.name : p.target?.name
                   return (
                     <div className="custom-tooltip min-w-[220px]">
                       <div className="text-xs text-text-secondary mb-1">
-                        {src.name} → {tgt.name}
+                        {srcName ?? "?"} → {tgtName ?? "?"}
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="text-text-secondary">Flow</span>
-                        <span className="font-semibold text-text-primary">{formatUSD(p.value)}</span>
+                        <span className="font-semibold text-text-primary">
+                          {formatUSD(p.value)}
+                        </span>
                       </div>
                     </div>
                   )
                 }
+                // Node hover: p.name is the node label. p.value is not always populated by
+                // Recharts for computed nodes — fall back to summing links touching this node.
+                const nodeName = p?.name || "(unknown)"
+                const nodeIdx = nodes.findIndex((n) => n.name === nodeName)
+                const inflow = links
+                  .filter((l) => l.target === nodeIdx)
+                  .reduce((s, l) => s + l.value, 0)
+                const outflow = links
+                  .filter((l) => l.source === nodeIdx)
+                  .reduce((s, l) => s + l.value, 0)
+                const val =
+                  typeof p?.value === "number" && !Number.isNaN(p.value)
+                    ? p.value
+                    : Math.max(inflow, outflow)
                 return (
                   <div className="custom-tooltip min-w-[180px]">
-                    <div className="text-xs text-text-secondary">{p.name}</div>
+                    <div className="text-xs text-text-secondary">{nodeName}</div>
                     <div className="flex justify-between text-xs mt-0.5">
                       <span className="text-text-secondary">Total</span>
-                      <span className="font-semibold text-text-primary">{formatUSD(p.value)}</span>
+                      <span className="font-semibold text-text-primary">
+                        {formatUSD(val)}
+                      </span>
                     </div>
+                    {inflow > 0 && outflow > 0 && (
+                      <div className="flex justify-between text-[10px] mt-0.5 text-text-muted">
+                        <span>In {formatUSD(inflow)}</span>
+                        <span>Out {formatUSD(outflow)}</span>
+                      </div>
+                    )}
                   </div>
                 )
               }}

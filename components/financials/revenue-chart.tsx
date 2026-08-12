@@ -63,7 +63,7 @@ function ChartTooltip({ active, payload, label }: any) {
 
 export function RevenueChart({ daily }: RevenueChartProps) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("W")
+  const [period, setPeriod] = useState<Period>("M")
   const [visible, setVisible] = useState<Record<string, boolean>>({
     netInterestIncome: true,
     sllRevenue: true,

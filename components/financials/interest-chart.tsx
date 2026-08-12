@@ -62,7 +62,7 @@ function ChartTooltip({ active, payload, label, showSplit }: any) {
 
 export function InterestChart({ daily }: InterestChartProps) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("W")
+  const [period, setPeriod] = useState<Period>("M")
   const [showSplit, setShowSplit] = useState(false)
 
   const chartData = useMemo(
