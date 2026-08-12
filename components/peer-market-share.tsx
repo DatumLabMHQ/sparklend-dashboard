@@ -151,12 +151,14 @@ export function SparkShareOverTime({ peers }: { peers: PeersData }) {
     // Bucket by month or quarter.
     const groups = new Map<string, { sum: number; count: number; anchor: number }>()
     const order: string[] = []
+    const keyFor = (ts: number) => {
+      const dt = new Date(ts * 1000)
+      return period === "M"
+        ? dt.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })
+        : `Q${Math.ceil((dt.getUTCMonth() + 1) / 3)} ${dt.getUTCFullYear()}`
+    }
     for (const d of raw) {
-      const dt = new Date((d.date as number) * 1000)
-      const key =
-        period === "M"
-          ? dt.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })
-          : `Q${Math.ceil((dt.getUTCMonth() + 1) / 3)} ${dt.getUTCFullYear()}`
+      const key = keyFor(d.date as number)
       if (!groups.has(key)) {
         groups.set(key, { sum: 0, count: 0, anchor: d.date as number })
         order.push(key)
@@ -165,7 +167,13 @@ export function SparkShareOverTime({ peers }: { peers: PeersData }) {
       g.sum += d.sparkShare as number
       g.count++
     }
-    return order.map((k) => ({ label: k, share: groups.get(k)!.sum / groups.get(k)!.count }))
+    // Drop the trailing partial-period bucket.
+    let out = order
+    const nowKey = keyFor(Math.floor(Date.now() / 1000))
+    if (out.length > 0 && out[out.length - 1] === nowKey) {
+      out = out.slice(0, -1)
+    }
+    return out.map((k) => ({ label: k, share: groups.get(k)!.sum / groups.get(k)!.count }))
   }, [peers.daily, period])
 
   const actions = (

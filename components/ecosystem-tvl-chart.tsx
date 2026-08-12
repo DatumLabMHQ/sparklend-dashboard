@@ -66,7 +66,15 @@ function bucketWeekly(daily: Point[], period: Period): Array<Record<string, any>
     g.total += p.total
     g.count++
   }
-  return order.map((k) => {
+  // Drop the trailing partial-period bucket so the last bar is always a
+  // full period. Even for stocks (TVL averaged over the window), a
+  // partial-week average can look different from a full-week average.
+  let out = order
+  const nowKey = keyFn(Math.floor(Date.now() / 1000))
+  if (out.length > 0 && out[out.length - 1] === nowKey) {
+    out = out.slice(0, -1)
+  }
+  return out.map((k) => {
     const g = groups.get(k)!
     return {
       label: k,

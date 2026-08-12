@@ -37,7 +37,8 @@ function getDayLabel(ts: number): string {
 export function aggregateData(
   daily: DailyEntry[],
   period: Period,
-  valueKeys: string[]
+  valueKeys: string[],
+  opts: { dropIncomplete?: boolean } = { dropIncomplete: true }
 ): Array<Record<string, any>> {
   if (period === "D") {
     return daily.map((d) => {
@@ -75,7 +76,18 @@ export function aggregateData(
     })
   }
 
-  return order.map((key) => ({
+  // Drop the trailing bucket if it's the CURRENT period — i.e., its key matches
+  // the key for today. This prevents a visually-low last bar caused by a
+  // partial week/month/quarter/year. Default: on.
+  let output = order
+  if (opts.dropIncomplete !== false && order.length > 0) {
+    const nowKey = getKey(Math.floor(Date.now() / 1000))
+    if (order[order.length - 1] === nowKey) {
+      output = order.slice(0, -1)
+    }
+  }
+
+  return output.map((key) => ({
     label: key,
     ...groups.get(key)!,
   }))

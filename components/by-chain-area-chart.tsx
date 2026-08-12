@@ -56,11 +56,17 @@ function bucket(
     g.count++
     for (const c of chains) g.sums[c] += p[c] || 0
   }
-  return order.map((k) => {
+  // Drop the trailing partial-period bucket.
+  let out = order
+  const nowKey = keyFn(Math.floor(Date.now() / 1000))
+  if (out.length > 0 && out[out.length - 1] === nowKey) {
+    out = out.slice(0, -1)
+  }
+  return out.map((k) => {
     const g = groups.get(k)!
-    const out: Record<string, any> = { label: k }
-    for (const c of chains) out[c] = g.sums[c] / g.count
-    return out
+    const row: Record<string, any> = { label: k }
+    for (const c of chains) row[c] = g.sums[c] / g.count
+    return row
   })
 }
 
