@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback } from "react"
 import { WalletExplorer } from "@/components/wallets/wallet-explorer"
 import { WalletTable } from "@/components/wallets/wallet-table"
+import { WhaleConcentration } from "@/components/whale-concentration"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 import { formatUSD } from "@/lib/utils"
 
@@ -191,6 +192,9 @@ export default function WalletsPage() {
           </div>
         </div>
       </div>
+
+      {/* Whale concentration — top-10 borrowers as % of protocol debt */}
+      {data.length > 0 && <WhaleConcentration positions={data} totalDebt={totalDebt} />}
 
       <WalletExplorer
         allAssets={allAssets}

@@ -6,6 +6,7 @@ import { EcosystemTvlChart } from "@/components/ecosystem-tvl-chart"
 import { CollateralConcentration } from "@/components/collateral-concentration"
 import { WstEthPipeline } from "@/components/wsteth-pipeline"
 import { PeerMarketShareRanked, SparkShareOverTime } from "@/components/peer-market-share"
+import { PeerRevenueYoY } from "@/components/peer-revenue-yoy"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 import { ProcessedDayData } from "@/lib/types"
@@ -157,6 +158,11 @@ export default function HomePage() {
     currentTotal: number
     currentSparkShare: number
   }>("/api/peers", { ttl: 15 * 60_000 })
+  const { data: peerRevData } = useCachedFetch<{
+    peers: Array<{ slug: string; name: string; isSpark: boolean; recent90d: number; prior90d: number; yoyPct: number | null }>
+    sll: { name: string; recent90d: number; prior90d: number; yoyPct: number | null }
+    window: { days: number }
+  }>("/api/peer-revenue", { ttl: 15 * 60_000 })
 
   if (loading) return <LoadingSkeleton />
   if (error || !rawData) {
@@ -271,6 +277,11 @@ export default function HomePage() {
             <PeerMarketShareRanked peers={peersData} />
             <SparkShareOverTime peers={peersData} />
           </div>
+        )}
+
+        {/* Peer revenue YoY — the "Spark growing while peers shrink" narrative */}
+        {peerRevData?.peers && (
+          <PeerRevenueYoY peers={peerRevData.peers} sll={peerRevData.sll} window={peerRevData.window} />
         )}
 
         {/* Section divider */}
