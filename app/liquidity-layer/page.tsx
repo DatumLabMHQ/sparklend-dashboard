@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react"
 import { ByChainAreaChart } from "@/components/by-chain-area-chart"
 import { ChartFrame } from "@/components/chart-frame"
+import { SllVenueBreakdown } from "@/components/sll-venue-breakdown"
 import {
   AreaChart,
   Area,
@@ -51,6 +52,7 @@ export default function LiquidityLayerPage() {
   const colors = useThemeColors()
   const { data: eco, loading: ecoLoading } = useCachedFetch<EcosystemData>("/api/ecosystem", { ttl: 15 * 60_000 })
   const { data: fin } = useCachedFetch<FinancialsData>("/api/financials", { ttl: 10 * 60_000 })
+  const { data: venues } = useCachedFetch<any>("/api/sll-venues", { ttl: 30 * 60_000 })
   const [period, setPeriod] = useState<Period>("W")
 
   const sllSeries = useMemo(
@@ -209,6 +211,9 @@ export default function LiquidityLayerPage() {
           </ResponsiveContainer>
         </div>
       </ChartFrame>
+
+      {/* SLL Deployment by Venue — the "where is the balance sheet parked" chart */}
+      {venues?.categories && <SllVenueBreakdown data={venues} />}
 
       {/* Side-by-side: TVL by chain + Revenue over time */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

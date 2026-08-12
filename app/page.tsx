@@ -4,6 +4,7 @@ import { MetricCard } from "@/components/metric-card"
 import { ProtocolAreaChart } from "@/components/protocol-area-chart"
 import { EcosystemTvlChart } from "@/components/ecosystem-tvl-chart"
 import { CollateralConcentration } from "@/components/collateral-concentration"
+import { WstEthPipeline } from "@/components/wsteth-pipeline"
 import { PeerMarketShareRanked, SparkShareOverTime } from "@/components/peer-market-share"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
@@ -277,10 +278,14 @@ export default function HomePage() {
           <span className="tui-divider-label">SparkLend Positions</span>
         </div>
 
-        {/* Collateral concentration — the wstETH-dominance story */}
+        {/* Collateral concentration + wstETH loop pipeline (side-by-side story) */}
         <CollateralConcentration
           tokens={collateralTokens}
           borrowTokens={latestBorrow as Record<string, number>}
+        />
+        <WstEthPipeline
+          supplyTokens={rawData.supply.tokensInUsd}
+          borrowTokens={rawData.borrow.tokensInUsd}
         />
 
         {/* Supply & Borrow Charts Side by Side */}
