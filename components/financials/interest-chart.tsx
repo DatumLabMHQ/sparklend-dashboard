@@ -5,8 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recha
 import { formatUSD } from "@/lib/utils"
 import { PeriodToggle, type Period } from "./period-toggle"
 import { aggregateData } from "./aggregate"
-import { MethodologyTooltip } from "./methodology-tooltip"
-import { ChartCard } from "@/components/chart-card"
+import { ChartFrame } from "@/components/chart-frame"
 import { useThemeColors } from "@/components/theme-provider"
 
 const METHODOLOGY = `Total Interest Accrued represents the gross interest generated across all SparkLend lending markets before any splits.
@@ -71,17 +70,18 @@ export function InterestChart({ daily }: InterestChartProps) {
     [daily, period]
   )
 
-  const chartActions = (
-    <div className="flex items-center gap-2 mr-2">
-      <MethodologyTooltip text={METHODOLOGY} />
-      <PeriodToggle selected={period} onChange={setPeriod} />
-    </div>
-  )
+  const chartActions = <PeriodToggle selected={period} onChange={setPeriod} />
 
   return (
-    <ChartCard title="Total Interest Accrued" subtitle="Interest from lending" actions={chartActions}>
-      {/* Split toggle */}
-      <div className="flex items-center gap-3 px-1 mb-2">
+    <ChartFrame
+      title="Total Interest Accrued"
+      subtitle="Gross interest generated across all SparkLend markets, with optional Lender / Protocol split"
+      units="USD"
+      methodology={METHODOLOGY}
+      actions={chartActions}
+      height={280}
+    >
+      <div className="flex items-center gap-3 px-1 mb-2 mt-1">
         <button
           onClick={() => setShowSplit(false)}
           className={`flex items-center gap-1.5 text-xs transition-opacity ${!showSplit ? "opacity-100" : "opacity-40"}`}
@@ -101,7 +101,7 @@ export function InterestChart({ daily }: InterestChartProps) {
         </button>
       </div>
 
-      <div className="h-[calc(100%-28px)] w-full">
+      <div style={{ height: 240 }} className="w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 0 }}>
             <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: colors.textMuted }} interval="preserveStartEnd" minTickGap={30} />
@@ -118,6 +118,6 @@ export function InterestChart({ daily }: InterestChartProps) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-    </ChartCard>
+    </ChartFrame>
   )
 }

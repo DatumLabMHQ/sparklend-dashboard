@@ -5,8 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recha
 import { formatUSD } from "@/lib/utils"
 import { PeriodToggle, type Period } from "./period-toggle"
 import { aggregateData } from "./aggregate"
-import { MethodologyTooltip } from "./methodology-tooltip"
-import { ChartCard } from "@/components/chart-card"
+import { ChartFrame } from "@/components/chart-frame"
 import { useThemeColors } from "@/components/theme-provider"
 
 interface FeeChartProps {
@@ -40,16 +39,18 @@ export function FeeChart({ title, subtitle, daily, dataKey, color, methodology }
     [daily, period, dataKey]
   )
 
-  const chartActions = (
-    <div className="flex items-center gap-2 mr-2">
-      {methodology && <MethodologyTooltip text={methodology} />}
-      <PeriodToggle selected={period} onChange={setPeriod} />
-    </div>
-  )
+  const chartActions = <PeriodToggle selected={period} onChange={setPeriod} />
 
   return (
-    <ChartCard title={title} subtitle={subtitle} actions={chartActions} heightClass="h-[220px]">
-      <div className="h-full w-full">
+    <ChartFrame
+      title={title}
+      subtitle={subtitle}
+      units="USD"
+      methodology={methodology}
+      actions={chartActions}
+      height={220}
+    >
+      <div style={{ height: 220 }} className="w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 0 }}>
             <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: colors.textMuted }} interval="preserveStartEnd" minTickGap={30} />
@@ -59,6 +60,6 @@ export function FeeChart({ title, subtitle, daily, dataKey, color, methodology }
           </BarChart>
         </ResponsiveContainer>
       </div>
-    </ChartCard>
+    </ChartFrame>
   )
 }

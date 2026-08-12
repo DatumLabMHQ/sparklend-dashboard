@@ -5,8 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recha
 import { formatUSD } from "@/lib/utils"
 import { PeriodToggle, type Period } from "./period-toggle"
 import { aggregateData } from "./aggregate"
-import { MethodologyTooltip } from "./methodology-tooltip"
-import { ChartCard } from "@/components/chart-card"
+import { ChartFrame } from "@/components/chart-frame"
 import { useThemeColors } from "@/components/theme-provider"
 
 const METHODOLOGY = `Spark Total Revenue captures every stream of income flowing to the protocol treasury:
@@ -83,21 +82,25 @@ export function RevenueChart({ daily }: RevenueChartProps) {
   }
 
   const chartActions = (
-    <div className="flex items-center gap-2 mr-2">
-      <MethodologyTooltip text={METHODOLOGY} />
-      <PeriodToggle selected={period} onChange={setPeriod} />
-    </div>
+    <PeriodToggle selected={period} onChange={setPeriod} />
   )
 
   return (
-    <ChartCard title="Spark Total Revenue" subtitle="SparkLend, Spark Liquidity Layer, Distribution Rewards and Liquidation, after funding cost" actions={chartActions}>
-      {/* Stream toggles */}
-      <div className="flex items-center gap-4 px-1 mb-2">
+    <ChartFrame
+      title="Spark Total Revenue"
+      subtitle="SparkLend, Spark Liquidity Layer, Distribution Rewards and Liquidation, after funding cost"
+      units="USD"
+      source="DefiLlama (sparklend + spark-liquidity-layer) + on-chain USDS mints"
+      methodology={METHODOLOGY}
+      actions={chartActions}
+      height={320}
+    >
+      <div className="flex items-center gap-4 px-1 mb-2 mt-1">
         {STREAMS.map((s) => (
           <button
             key={s.key}
             onClick={() => toggleStream(s.key)}
-            className={`flex items-center gap-1.5 text-xs transition-opacity ${visible[s.key] ? "opacity-100" : "opacity-40"}`}
+            className={`flex items-center gap-1.5 text-[11px] transition-opacity ${visible[s.key] ? "opacity-100" : "opacity-40"}`}
           >
             <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: s.color }} />
             <span className="text-text-secondary">{s.label}</span>
@@ -105,7 +108,7 @@ export function RevenueChart({ daily }: RevenueChartProps) {
         ))}
       </div>
 
-      <div className="h-[calc(100%-28px)] w-full">
+      <div style={{ height: 280 }} className="w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 0 }}>
             <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: colors.textMuted }} interval="preserveStartEnd" minTickGap={30} />
@@ -120,6 +123,6 @@ export function RevenueChart({ daily }: RevenueChartProps) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-    </ChartCard>
+    </ChartFrame>
   )
 }

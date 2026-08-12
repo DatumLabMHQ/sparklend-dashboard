@@ -12,7 +12,7 @@ import {
 import { ProcessedDayData } from "@/lib/types"
 import { formatUSD, formatUSDFull, formatDateFull, getTokenName, getTokenColor } from "@/lib/utils"
 import { TimeToggle } from "./time-toggle"
-import { ChartCard } from "./chart-card"
+import { ChartFrame } from "./chart-frame"
 import { useThemeColors } from "./theme-provider"
 
 interface ProtocolAreaChartProps {
@@ -109,7 +109,7 @@ export function ProtocolAreaChart({
   const displayTokens = selectedToken ? [selectedToken] : allTokens
 
   const chartActions = (
-    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginRight: "8px" }}>
+    <div className="flex items-center gap-2">
       <select
         value={selectedToken || "all"}
         onChange={(e) =>
@@ -118,13 +118,15 @@ export function ProtocolAreaChart({
         style={{
           backgroundColor: "var(--background)",
           border: "1px solid var(--card-border)",
-          borderRadius: "4px",
-          padding: "4px 8px",
-          fontSize: "12px",
+          borderRadius: "3px",
+          padding: "2px 6px",
+          fontSize: "10px",
           color: "var(--text-secondary)",
           outline: "none",
           cursor: "pointer",
           fontFamily: "inherit",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
         }}
       >
         <option value="all">Assets ({allTokens.length})</option>
@@ -139,8 +141,14 @@ export function ProtocolAreaChart({
   )
 
   return (
-    <ChartCard title={title} subtitle={subtitle} actions={chartActions}>
-      <div className="h-full w-full">
+    <ChartFrame
+      title={title}
+      subtitle={subtitle}
+      units="USD"
+      actions={chartActions}
+      height={300}
+    >
+      <div style={{ height: 300 }} className="w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart
             data={data}
@@ -212,6 +220,6 @@ export function ProtocolAreaChart({
           </AreaChart>
         </ResponsiveContainer>
       </div>
-    </ChartCard>
+    </ChartFrame>
   )
 }

@@ -2,6 +2,9 @@
 
 import { MetricCard } from "@/components/metric-card"
 import { ProtocolAreaChart } from "@/components/protocol-area-chart"
+import { EcosystemTvlChart } from "@/components/ecosystem-tvl-chart"
+import { CollateralConcentration } from "@/components/collateral-concentration"
+import { PeerMarketShareRanked, SparkShareOverTime } from "@/components/peer-market-share"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 import { ProcessedDayData } from "@/lib/types"
@@ -143,6 +146,16 @@ function get24hChange(
 
 export default function HomePage() {
   const { data: rawData, loading, error } = useCachedFetch("/api/sparklend", { ttl: 5 * 60_000 })
+  const { data: ecoData } = useCachedFetch<{
+    daily: Array<{ date: number; savings: number; sparklend: number; sll: number; total: number }>
+    current: { savings: number; sparklend: number; sll: number; total: number }
+  }>("/api/ecosystem", { ttl: 15 * 60_000 })
+  const { data: peersData } = useCachedFetch<{
+    daily: Array<Record<string, number>>
+    current: Array<{ slug: string; name: string; isSpark: boolean; borrow: number; share: number }>
+    currentTotal: number
+    currentSparkShare: number
+  }>("/api/peers", { ttl: 15 * 60_000 })
 
   if (loading) return <LoadingSkeleton />
   if (error || !rawData) {
@@ -181,6 +194,15 @@ export default function HomePage() {
   const supplyChange = get24hChange(rawData.supply.tvl) + get24hChange(rawData.borrow.tvl)
   const borrowChange = get24hChange(rawData.borrow.tvl)
   const liquidityChange = get24hChange(rawData.supply.tvl)
+
+  // Latest per-token snapshots for the collateral concentration donut.
+  // supply-side value per token = liquidity[token] + borrowed[token].
+  const latestSupply = rawData.supply.tokensInUsd?.at(-1)?.tokens || {}
+  const latestBorrow = rawData.borrow.tokensInUsd?.at(-1)?.tokens || {}
+  const collateralTokens: Record<string, number> = {}
+  for (const [k, v] of Object.entries(latestSupply)) {
+    collateralTokens[k] = (v as number) + ((latestBorrow[k] as number) || 0)
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -232,6 +254,35 @@ export default function HomePage() {
           />
         </div>
 
+        {/* Hero: Spark Ecosystem TVL (3 product lines) */}
+        {ecoData?.daily && ecoData.daily.length > 0 && (
+          <EcosystemTvlChart daily={ecoData.daily} current={ecoData.current} />
+        )}
+
+        {/* Section divider */}
+        <div className="tui-divider-labeled">
+          <span className="tui-divider-label">Competitive Positioning</span>
+        </div>
+
+        {/* Peer market share: ranked bar + share over time */}
+        {peersData?.current && peersData.daily && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <PeerMarketShareRanked peers={peersData} />
+            <SparkShareOverTime peers={peersData} />
+          </div>
+        )}
+
+        {/* Section divider */}
+        <div className="tui-divider-labeled">
+          <span className="tui-divider-label">SparkLend Positions</span>
+        </div>
+
+        {/* Collateral concentration — the wstETH-dominance story */}
+        <CollateralConcentration
+          tokens={collateralTokens}
+          borrowTokens={latestBorrow as Record<string, number>}
+        />
+
         {/* Supply & Borrow Charts Side by Side */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ProtocolAreaChart
@@ -261,16 +312,6 @@ export default function HomePage() {
           allTokens30d={liq30.allTokens}
           allTokens90d={liq90.allTokens}
         />
-
-        {/* Footer */}
-        <footer className="border-t border-card-border pt-3 pb-6 flex items-center justify-between">
-          <p className="text-[9px] text-text-muted tracking-wider uppercase">
-            Data sourced from DefiLlama · Updated hourly
-          </p>
-          <p className="text-[9px] text-text-muted tracking-wider">
-            Datum Labs &copy; {new Date().getFullYear()}
-          </p>
-        </footer>
       </main>
     </div>
   )

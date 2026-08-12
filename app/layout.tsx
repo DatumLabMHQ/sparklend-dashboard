@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Suspense } from "react"
 import { NavHeader } from "@/components/nav-header"
+import { SiteFooter } from "@/components/site-footer"
 import { ThemeProvider } from "@/components/theme-provider"
 import "./globals.css"
 
@@ -55,6 +56,9 @@ export default function RootLayout({
             <NavHeader />
             <main className="flex-1">
               <Suspense fallback={<PageFallback />}>{children}</Suspense>
+              <div className="max-w-[1400px] mx-auto px-4 lg:px-6">
+                <SiteFooter />
+              </div>
             </main>
 
             {/* Status Bar */}

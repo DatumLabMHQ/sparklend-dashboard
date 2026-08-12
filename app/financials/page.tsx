@@ -4,6 +4,7 @@ import { useMemo } from "react"
 import { RevenueChart } from "@/components/financials/revenue-chart"
 import { InterestChart } from "@/components/financials/interest-chart"
 import { FeeChart } from "@/components/financials/fee-chart"
+import { DistRewardsShareChart } from "@/components/financials/dist-rewards-share-chart"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 
@@ -113,10 +114,13 @@ export default function FinancialsPage() {
         </div>
       )}
 
-      {/* 1. SparkLend Revenue (full width) */}
+      {/* 1. Spark Total Revenue (full width) */}
       <RevenueChart daily={daily} />
 
-      {/* 2. Total Interest Accrued + Net Interest Income (side by side) */}
+      {/* 2. Distribution Rewards share (full width) — the Q2 report narrative */}
+      <DistRewardsShareChart daily={daily} />
+
+      {/* 3. Total Interest Accrued + Net Interest Income (side by side) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <InterestChart daily={daily} />
         <FeeChart
@@ -149,15 +153,6 @@ export default function FinancialsPage() {
         />
       </div>
 
-      {/* Footer */}
-      <footer className="border-t border-card-border pt-4 pb-8 flex items-center justify-between">
-        <p className="text-[10px] text-text-muted">
-          Data sourced from DefiLlama Fees API. Updated hourly.
-        </p>
-        <p className="text-[10px] text-text-muted">
-          Datum Labs &copy; {new Date().getFullYear()}
-        </p>
-      </footer>
     </div>
   )
 }

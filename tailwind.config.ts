@@ -22,6 +22,8 @@ const config: Config = {
         "accent-secondary": "var(--accent-secondary)",
         success: "var(--success)",
         danger: "var(--danger)",
+        warning: "var(--warning)",
+        positive: "var(--success)",
       },
     },
   },

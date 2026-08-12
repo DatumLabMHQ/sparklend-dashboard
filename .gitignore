@@ -51,3 +51,5 @@ tmp/
 
 # claude code local
 .claude/
+
+.vercel

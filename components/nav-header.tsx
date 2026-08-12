@@ -79,13 +79,11 @@ export function NavHeader() {
                     href={item.href}
                     prefetch={true}
                     onMouseEnter={() => prefetchApis(item.href)}
-                    className="px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] rounded transition-colors"
+                    className={`px-2.5 py-1 text-[11px] uppercase tracking-[0.08em] rounded-sm transition-colors ${
+                      active ? "nav-active" : ""
+                    }`}
                     style={{
-                      color: active ? "var(--accent-orange)" : "var(--text-muted)",
-                      background: active ? "rgba(255, 107, 53, 0.08)" : "transparent",
-                      borderBottom: active
-                        ? "1px solid var(--accent-orange)"
-                        : "1px solid transparent",
+                      color: active ? "var(--accent)" : "var(--text-muted)",
                     }}
                   >
                     {item.label}
@@ -120,16 +118,13 @@ export function NavHeader() {
               )}
             </button>
 
-            {/* CONNECTED indicator */}
+            {/* Live indicator - terminal-style blinking dot */}
             <span
               className="inline-flex items-center gap-1.5 text-[10px]"
-              style={{ color: "var(--text-muted)" }}
+              style={{ color: "var(--success)" }}
             >
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
-                style={{ background: "var(--accent-orange)" }}
-              />
-              CONNECTED
+              <span className="terminal-blink">●</span>
+              <span className="hidden sm:inline uppercase tracking-[0.1em]">Live</span>
             </span>
           </div>
         </div>
@@ -146,10 +141,11 @@ export function NavHeader() {
             <Link
               key={item.href}
               href={item.href}
-              className="px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] rounded whitespace-nowrap transition-colors"
+              className={`px-2.5 py-1 text-[11px] uppercase tracking-[0.08em] rounded-sm whitespace-nowrap transition-colors ${
+                active ? "nav-active" : ""
+              }`}
               style={{
-                color: active ? "var(--accent-orange)" : "var(--text-muted)",
-                background: active ? "rgba(255, 107, 53, 0.08)" : "transparent",
+                color: active ? "var(--accent)" : "var(--text-muted)",
               }}
             >
               {item.label}
