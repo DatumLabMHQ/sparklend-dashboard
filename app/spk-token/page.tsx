@@ -2,6 +2,7 @@
 
 import { useMemo } from "react"
 import { ChartFrame } from "@/components/chart-frame"
+import { SpkHolderDistribution } from "@/components/spk-holder-distribution"
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
@@ -43,6 +44,7 @@ function formatSupply(v: number): string {
 export default function SpkTokenPage() {
   const colors = useThemeColors()
   const { data, loading, error } = useCachedFetch<SpkData>("/api/spk-token", { ttl: 10 * 60_000 })
+  const { data: holdersData } = useCachedFetch<any>("/api/spk-holders", { ttl: 30 * 60_000 })
 
   const chartData = useMemo(
     () =>
@@ -251,6 +253,11 @@ export default function SpkTokenPage() {
           </ResponsiveContainer>
         </div>
       </ChartFrame>
+
+      {/* Top holders */}
+      {holdersData?.holders && (
+        <SpkHolderDistribution data={holdersData} currentSpkPrice={current.price} />
+      )}
     </div>
   )
 }

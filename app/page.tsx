@@ -5,6 +5,7 @@ import { ProtocolAreaChart } from "@/components/protocol-area-chart"
 import { EcosystemTvlChart } from "@/components/ecosystem-tvl-chart"
 import { CollateralConcentration } from "@/components/collateral-concentration"
 import { WstEthPipeline } from "@/components/wsteth-pipeline"
+import { DepositsBorrowsSankey } from "@/components/deposits-borrows-sankey"
 import { PeerMarketShareRanked, SparkShareOverTime } from "@/components/peer-market-share"
 import { PeerRevenueYoY } from "@/components/peer-revenue-yoy"
 import { formatUSD } from "@/lib/utils"
@@ -297,6 +298,12 @@ export default function HomePage() {
         <WstEthPipeline
           supplyTokens={rawData.supply.tokensInUsd}
           borrowTokens={rawData.borrow.tokensInUsd}
+        />
+
+        {/* Deposits vs Borrows Sankey - the flow-map story */}
+        <DepositsBorrowsSankey
+          supplyTokens={collateralTokens}
+          borrowTokens={latestBorrow as Record<string, number>}
         />
 
         {/* Supply & Borrow Charts Side by Side */}
