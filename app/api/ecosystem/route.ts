@@ -30,31 +30,39 @@ const TTL = 30 * 60_000
 
 async function fetchProtocolAllChains(
   slug: string
-): Promise<{ tvl: Series; borrow: Series }> {
+): Promise<{ tvl: Series; borrow: Series; perChain: Record<string, Series> }> {
   const res = await fetch(`https://api.llama.fi/protocol/${slug}`, {
     cache: "no-store",
   })
   if (!res.ok) throw new Error(`${slug} ${res.status}`)
   const data = await res.json()
-  // Sum across every chain (SparkLend has Ethereum + xDai; SLL has Ethereum
-  // + 7 L2s; Savings has Ethereum + 7 chains). We want the total, not per-
-  // chain, because the Q2 report framing is ecosystem-wide.
   const tvlMap = new Map<number, number>()
   const borrowMap = new Map<number, number>()
+  const perChain: Record<string, Map<number, number>> = {}
   for (const [chainKey, ct] of Object.entries<any>(data.chainTvls || {})) {
-    if (chainKey === "staking" || chainKey === "pool2") continue
+    if (chainKey === "staking" || chainKey === "pool2" || chainKey === "borrowed") continue
     const isBorrow = chainKey.endsWith("-borrowed")
     const target = isBorrow ? borrowMap : tvlMap
-    // Skip the aggregated "borrowed" key when we have per-chain equivalents
-    // to avoid double-counting.
-    if (chainKey === "borrowed") continue
+    // Per-chain tracking (skip the "-borrowed" duplicates since we want the
+    // supply-side chain breakdown, not the borrowed side).
+    if (!isBorrow) {
+      if (!perChain[chainKey]) perChain[chainKey] = new Map()
+    }
     for (const p of ct.tvl || []) {
       target.set(p.date, (target.get(p.date) || 0) + p.totalLiquidityUSD)
+      if (!isBorrow) {
+        perChain[chainKey].set(p.date, p.totalLiquidityUSD)
+      }
     }
   }
+  const toSeries = (m: Map<number, number>): Series =>
+    [...m.entries()].sort((a, b) => a[0] - b[0]).map(([date, value]) => ({ date, value }))
+  const perChainOut: Record<string, Series> = {}
+  for (const [k, v] of Object.entries(perChain)) perChainOut[k] = toSeries(v)
   return {
-    tvl: [...tvlMap.entries()].sort((a, b) => a[0] - b[0]).map(([date, value]) => ({ date, value })),
-    borrow: [...borrowMap.entries()].sort((a, b) => a[0] - b[0]).map(([date, value]) => ({ date, value })),
+    tvl: toSeries(tvlMap),
+    borrow: toSeries(borrowMap),
+    perChain: perChainOut,
   }
 }
 
@@ -131,6 +139,32 @@ export async function GET() {
     }
 
     const latest = daily[daily.length - 1]
+
+    // Per-chain daily series for Savings + SLL. Aligned onto the same daily
+    // grid + forward-filled so a stacked-by-chain area is continuous.
+    function densifyPerChain(perChain: Record<string, Series>): {
+      chains: string[]
+      daily: Array<Record<string, number>>
+    } {
+      const chainNames = Object.keys(perChain)
+      const denseMap: Record<string, Map<number, number>> = {}
+      for (const c of chainNames) denseMap[c] = densify(perChain[c], earliest, today)
+      const out: Array<Record<string, number>> = []
+      for (let d = earliest; d <= today; d += 86400) {
+        const entry: Record<string, number> = { date: d }
+        for (const c of chainNames) entry[c] = denseMap[c].get(d) || 0
+        out.push(entry)
+      }
+      // Sort chain names by latest value, descending
+      const latestByChain: Record<string, number> = {}
+      for (const c of chainNames) latestByChain[c] = out.at(-1)?.[c] || 0
+      const sorted = chainNames.sort((a, b) => latestByChain[b] - latestByChain[a])
+      return { chains: sorted, daily: out }
+    }
+
+    const savingsByChain = densifyPerChain(savings.perChain)
+    const sllByChain = densifyPerChain(sll.perChain)
+
     const result = {
       daily,
       current: {
@@ -139,6 +173,8 @@ export async function GET() {
         sll: latest.sll,
         total: latest.total,
       },
+      savingsByChain,
+      sllByChain,
       meta: {
         source: "DefiLlama /protocol/{spark-savings, sparklend, spark-liquidity-layer}",
         sparkLendNote:

@@ -7,11 +7,12 @@ import { useTheme } from "./theme-provider"
 // Prefetch API data on nav hover to speed up page loads
 const prefetchCache = new Set<string>()
 const API_MAP: Record<string, string[]> = {
-  "/": ["/api/sparklend"],
+  "/": ["/api/sparklend", "/api/ecosystem", "/api/peers"],
   "/markets": ["/api/markets"],
-  "/wallets": ["/api/wallets"],
-  "/liquidations": ["/api/liquidations"],
+  "/savings": ["/api/ecosystem"],
+  "/liquidity-layer": ["/api/ecosystem", "/api/financials"],
   "/financials": ["/api/financials"],
+  "/spk-token": ["/api/spk-token"],
 }
 
 function prefetchApis(href: string) {
@@ -30,12 +31,16 @@ export function NavHeader() {
   const pathname = usePathname()
   const { theme, toggleTheme } = useTheme()
 
+  // 6-item ecosystem navigation matching Spark's 3-product framing.
+  // Wallets + Liquidations still accessible by direct URL — Phase 4 will
+  // fold them into franchise views under SparkLend.
   const navItems = [
     { href: "/", label: "Overview" },
-    { href: "/markets", label: "Markets" },
-    { href: "/wallets", label: "Wallets" },
-    { href: "/liquidations", label: "Liquidations" },
+    { href: "/markets", label: "SparkLend" },
+    { href: "/savings", label: "Savings" },
+    { href: "/liquidity-layer", label: "Liquidity Layer" },
     { href: "/financials", label: "Financials" },
+    { href: "/spk-token", label: "$SPK" },
   ]
 
   const isActive = (href: string) =>
