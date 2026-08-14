@@ -133,7 +133,7 @@ type Period = "M" | "Q" | "ALL"
 
 export function SparkShareOverTime({ peers }: { peers: PeersData }) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("Q")
+  const [period, setPeriod] = useState<Period>("ALL")
 
   const data = useMemo(() => {
     const raw = peers.daily
@@ -167,13 +167,9 @@ export function SparkShareOverTime({ peers }: { peers: PeersData }) {
       g.sum += d.sparkShare as number
       g.count++
     }
-    // Drop the trailing partial-period bucket.
-    let out = order
-    const nowKey = keyFor(Math.floor(Date.now() / 1000))
-    if (out.length > 0 && out[out.length - 1] === nowKey) {
-      out = out.slice(0, -1)
-    }
-    return out.map((k) => ({ label: k, share: groups.get(k)!.sum / groups.get(k)!.count }))
+    // Keep the current partial period — share-of-market is a stock, not a
+    // flow, so averaging fewer days is still a valid reading.
+    return order.map((k) => ({ label: k, share: groups.get(k)!.sum / groups.get(k)!.count }))
   }, [peers.daily, period])
 
   const actions = (

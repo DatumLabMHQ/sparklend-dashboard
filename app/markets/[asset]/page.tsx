@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useParams } from "next/navigation"
+import { useMemo } from "react"
 import { MarketOverview } from "@/components/asset-detail/market-overview"
 import { ParamsCard } from "@/components/asset-detail/params-card"
 import { LineChartCard } from "@/components/asset-detail/line-chart-card"
@@ -9,6 +10,57 @@ import { InterestRateCurve } from "@/components/asset-detail/interest-rate-curve
 import { CollateralDonut } from "@/components/asset-detail/collateral-donut"
 import { formatPercent, formatTokenAmount, getTokenName } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
+
+/**
+ * Compute proportional asset composition for a market's detail page.
+ * side="borrowed-against": for wallets holding `focusSymbol` as collateral,
+ *   attribute each wallet's borrows proportionally to focusSymbol's share of
+ *   their collateral, then sum by asset.
+ * side="collateral-for": for wallets borrowing `focusSymbol`, attribute each
+ *   wallet's collateral proportionally to focusSymbol's share of their borrows.
+ */
+function computeComposition(
+  positions: any[],
+  focusSymbol: string,
+  side: "borrowed-against" | "collateral-for"
+): Array<{ symbol: string; valueUSD: number; percentage: number }> {
+  const focus = focusSymbol.toUpperCase()
+  const perAsset = new Map<string, number>()
+  for (const p of positions) {
+    const collateralUsd = (p.collateralUsd || {}) as Record<string, number>
+    const borrowUsd = (p.borrowUsd || {}) as Record<string, number>
+    const collTotal = Object.values(collateralUsd).reduce((s, v) => s + (v || 0), 0)
+    const debtTotal = Object.values(borrowUsd).reduce((s, v) => s + (v || 0), 0)
+    if (side === "borrowed-against") {
+      // Wallets with focus as collateral -> their borrows attributed by focus share.
+      const focusColl = collateralUsd[focus] || 0
+      if (focusColl <= 0 || collTotal <= 0) continue
+      const share = focusColl / collTotal
+      for (const [sym, usd] of Object.entries(borrowUsd)) {
+        if (!(usd > 0)) continue
+        perAsset.set(sym, (perAsset.get(sym) || 0) + usd * share)
+      }
+    } else {
+      // Wallets borrowing focus -> their collateral attributed by focus share.
+      const focusDebt = borrowUsd[focus] || 0
+      if (focusDebt <= 0 || debtTotal <= 0) continue
+      const share = focusDebt / debtTotal
+      for (const [sym, usd] of Object.entries(collateralUsd)) {
+        if (!(usd > 0)) continue
+        perAsset.set(sym, (perAsset.get(sym) || 0) + usd * share)
+      }
+    }
+  }
+  const total = Array.from(perAsset.values()).reduce((s, v) => s + v, 0)
+  if (total <= 0) return []
+  return Array.from(perAsset.entries())
+    .map(([symbol, valueUSD]) => ({
+      symbol,
+      valueUSD,
+      percentage: (valueUSD / total) * 100,
+    }))
+    .sort((a, b) => b.valueUSD - a.valueUSD)
+}
 
 function LoadingSkeleton() {
   return (
@@ -42,6 +94,12 @@ export default function AssetDetailPage() {
   const { data: history90, loading: loadH90 } = useCachedFetch(
     `/api/markets/${assetSlug}/history?days=90`,
     { ttl: 5 * 60_000 }
+  )
+  // Wallets data feeds the composition donuts. Top ~100 users carry the
+  // per-asset USD breakdown we need for proportional attribution.
+  const { data: wallets } = useCachedFetch<{ positions: any[] }>(
+    "/api/wallets?page=1&pageSize=200",
+    { ttl: 15 * 60_000 }
   )
 
   const loading = loadDetail || loadH30 || loadH90
@@ -242,29 +300,55 @@ export default function AssetDetailPage() {
         reserveFactor={detail.reserveFactor}
       />
 
-      {/* Section 6: Donut Charts (v2 placeholders) */}
+      {/* Section 6: Asset Composition Donuts */}
+      <AssetCompositionSection
+        symbol={detail.symbol}
+        walletPositions={wallets?.positions || []}
+      />
+    </div>
+  )
+}
+
+function AssetCompositionSection({
+  symbol,
+  walletPositions,
+}: {
+  symbol: string
+  walletPositions: any[]
+}) {
+  const sym = getTokenName(symbol)
+  const positionsWithBreakdown = useMemo(
+    () => walletPositions.filter((p) => p.collateralUsd && p.borrowUsd),
+    [walletPositions]
+  )
+  const borrowedAgainst = useMemo(
+    () => computeComposition(positionsWithBreakdown, symbol, "borrowed-against"),
+    [positionsWithBreakdown, symbol]
+  )
+  const collateralFor = useMemo(
+    () => computeComposition(positionsWithBreakdown, symbol, "collateral-for"),
+    [positionsWithBreakdown, symbol]
+  )
+
+  return (
+    <>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <CollateralDonut
           title={`Assets Borrowed Against ${sym}`}
-          subtitle={`Distribution of borrowed assets proportionally attributed to ${sym} collateral`}
-          data={[]}
+          subtitle={`What ${sym} depositors borrow — proportional attribution across top ${positionsWithBreakdown.length} wallets`}
+          data={borrowedAgainst}
         />
         <CollateralDonut
           title={`Collateral Used to Borrow ${sym}`}
-          subtitle={`Distribution of collateral assets proportionally attributed to ${sym} borrowing`}
-          data={[]}
+          subtitle={`What ${sym} borrowers post as collateral — proportional attribution across top ${positionsWithBreakdown.length} wallets`}
+          data={collateralFor}
         />
       </div>
-
-      {/* Footer */}
-      <footer className="border-t border-card-border pt-4 pb-8 flex items-center justify-between">
-        <p className="text-[10px] text-text-muted">
-          Data sourced from SparkLend on-chain contracts + DefiLlama. Updated every 2 minutes.
+      {positionsWithBreakdown.length === 0 && (
+        <p className="text-[10px] text-text-muted text-center">
+          Wallet-level breakdown is loading — refresh in a moment to see the composition.
         </p>
-        <p className="text-[10px] text-text-muted">
-          Datum Labs &copy; {new Date().getFullYear()}
-        </p>
-      </footer>
-    </div>
+      )}
+    </>
   )
 }

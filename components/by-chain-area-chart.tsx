@@ -34,17 +34,27 @@ function bucket(
 ): Array<Record<string, any>> {
   const groups = new Map<string, { count: number; sums: Record<string, number> }>()
   const order: string[] = []
+  // Key is used for grouping (stable string). Label is separate and reads
+  // as an actual date range (Monday of week for W) so users don't have to
+  // decode "W31 2026".
   const keyFn = (ts: number) => {
     const d = new Date(ts * 1000)
     if (period === "W") {
-      const jan1 = new Date(d.getUTCFullYear(), 0, 1)
-      const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7)
-      return `W${week} ${d.getUTCFullYear()}`
+      const day = d.getUTCDay()
+      const mondayOffset = (day + 6) % 7
+      const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayOffset))
+      return monday.toISOString().slice(0, 10)
     }
     if (period === "M")
       return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })
     const q = Math.ceil((d.getUTCMonth() + 1) / 3)
     return `Q${q} ${d.getUTCFullYear()}`
+  }
+  const displayLabel = (key: string): string => {
+    if (period !== "W") return key
+    const [y, m, dd] = key.split("-").map(Number)
+    const d = new Date(Date.UTC(y, m - 1, dd))
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) + ` '${String(y).slice(2)}`
   }
   for (const p of daily) {
     const k = keyFn(p.date)
@@ -56,15 +66,11 @@ function bucket(
     g.count++
     for (const c of chains) g.sums[c] += p[c] || 0
   }
-  // Drop the trailing partial-period bucket.
-  let out = order
-  const nowKey = keyFn(Math.floor(Date.now() / 1000))
-  if (out.length > 0 && out[out.length - 1] === nowKey) {
-    out = out.slice(0, -1)
-  }
-  return out.map((k) => {
+  // Keep the current partial period — TVL averaged over fewer days is still
+  // a valid stock reading and users expect the chart to extend to "now".
+  return order.map((k) => {
     const g = groups.get(k)!
-    const row: Record<string, any> = { label: k }
+    const row: Record<string, any> = { label: displayLabel(k) }
     for (const c of chains) row[c] = g.sums[c] / g.count
     return row
   })

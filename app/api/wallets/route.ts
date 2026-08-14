@@ -6,6 +6,7 @@ import {
   poolAddressesProviderAbi,
   poolDataProviderAbi,
   poolAbi,
+  oracleAbi,
 } from "@/lib/contracts"
 import { type Address, parseAbiItem } from "viem"
 import { readFileSync, writeFileSync, existsSync } from "fs"
@@ -193,6 +194,34 @@ async function fetchAssetBreakdown(topUsers: any[]) {
     functionName: "getAllReservesTokens",
   })) as Array<{ symbol: string; tokenAddress: Address }>
 
+  // Fetch decimals + prices in parallel with the position calls so we can
+  // convert raw amounts to USD.
+  const configCalls = reserves.map((t) => ({
+    address: dpAddr,
+    abi: poolDataProviderAbi,
+    functionName: "getReserveConfigurationData" as const,
+    args: [t.tokenAddress],
+  }))
+  const oracleAddr = (await client.readContract({
+    address: POOL_ADDRESSES_PROVIDER,
+    abi: poolAddressesProviderAbi,
+    functionName: "getPriceOracle",
+  })) as Address
+  const [configs, prices] = await Promise.all([
+    client.multicall({ contracts: configCalls }),
+    client.readContract({
+      address: oracleAddr,
+      abi: oracleAbi,
+      functionName: "getAssetsPrices",
+      args: [reserves.map((r) => r.tokenAddress)],
+    }) as Promise<bigint[]>,
+  ])
+  const reserveMeta = reserves.map((r, i) => {
+    const decimals = Number((configs[i].result as any)?.[0] ?? 18)
+    const priceUsd = Number(prices[i]) / 1e8 // SparkLend oracle returns 8-dec USD
+    return { ...r, decimals, priceUsd }
+  })
+
   const calls: any[] = []
   for (const u of topUsers)
     for (const t of reserves)
@@ -215,14 +244,36 @@ async function fetchAssetBreakdown(topUsers: any[]) {
 
   return topUsers.map((u, ui) => {
     const col: string[] = [], bor: string[] = []
+    // Per-asset USD amounts for this user: composition builder consumes these.
+    const collateralUsd: Record<string, number> = {}
+    const borrowUsd: Record<string, number> = {}
     for (let j = 0; j < reserves.length; j++) {
       const r = results[ui * reserves.length + j]
       if (r?.status !== "success" || !r.result) continue
       const d = r.result as any
-      if (Number(d[0]) > 0) col.push(reserves[j].symbol)
-      if (Number(d[1]) > 0 || Number(d[2]) > 0) bor.push(reserves[j].symbol)
+      const meta = reserveMeta[j]
+      const scale = Math.pow(10, meta.decimals)
+      const collAmt = Number(d[0]) / scale
+      const stableDebt = Number(d[1]) / scale
+      const varDebt = Number(d[2]) / scale
+      const collUsd = collAmt * meta.priceUsd
+      const debtUsd = (stableDebt + varDebt) * meta.priceUsd
+      if (collUsd > 0) {
+        col.push(meta.symbol)
+        collateralUsd[meta.symbol] = collUsd
+      }
+      if (debtUsd > 0) {
+        bor.push(meta.symbol)
+        borrowUsd[meta.symbol] = debtUsd
+      }
     }
-    return { ...u, collateralAssets: col, borrowAssets: bor }
+    return {
+      ...u,
+      collateralAssets: col,
+      borrowAssets: bor,
+      collateralUsd,
+      borrowUsd,
+    }
   })
 }
 

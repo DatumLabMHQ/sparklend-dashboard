@@ -35,21 +35,40 @@ interface Point {
   total: number
 }
 
+/**
+ * Build a "Monday of that week" date for the given timestamp — used to make
+ * week labels read like actual dates (e.g. "Jul 28 '26") rather than ISO
+ * week numbers ("W31 2026") which are opaque to most readers.
+ */
+function weekStart(ts: number): Date {
+  const d = new Date(ts * 1000)
+  const day = d.getUTCDay() // 0=Sun ... 6=Sat
+  const mondayOffset = (day + 6) % 7 // 0 for Mon, 6 for Sun
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayOffset))
+  return monday
+}
+
 function bucketWeekly(daily: Point[], period: Period): Array<Record<string, any>> {
   const groups = new Map<string, { total: number; savings: number; sparklend: number; sll: number; count: number; anchor: number }>()
   const order: string[] = []
   const keyFn = (ts: number) => {
     const d = new Date(ts * 1000)
     if (period === "W") {
-      const jan1 = new Date(d.getUTCFullYear(), 0, 1)
-      const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7)
-      return `W${week} ${d.getUTCFullYear()}`
+      const ws = weekStart(ts)
+      return ws.toISOString().slice(0, 10) // "YYYY-MM-DD" — stable sort key
     }
     if (period === "M")
       return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })
     // Q
     const q = Math.ceil((d.getUTCMonth() + 1) / 3)
     return `Q${q} ${d.getUTCFullYear()}`
+  }
+  // Format the key into a display label. Weeks show as "Jul 28 '26" (Monday of week).
+  const displayLabel = (key: string): string => {
+    if (period !== "W") return key
+    const [y, m, dd] = key.split("-").map(Number)
+    const d = new Date(Date.UTC(y, m - 1, dd))
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) + ` '${String(y).slice(2)}`
   }
   for (const p of daily) {
     const k = keyFn(p.date)
@@ -66,18 +85,13 @@ function bucketWeekly(daily: Point[], period: Period): Array<Record<string, any>
     g.total += p.total
     g.count++
   }
-  // Drop the trailing partial-period bucket so the last bar is always a
-  // full period. Even for stocks (TVL averaged over the window), a
-  // partial-week average can look different from a full-week average.
-  let out = order
-  const nowKey = keyFn(Math.floor(Date.now() / 1000))
-  if (out.length > 0 && out[out.length - 1] === nowKey) {
-    out = out.slice(0, -1)
-  }
-  return out.map((k) => {
+  // Keep the current partial period — averaging TVL across fewer days is
+  // still a valid stock reading and users expect the chart to extend to
+  // "now" rather than lag a period behind.
+  return order.map((k) => {
     const g = groups.get(k)!
     return {
-      label: k,
+      label: displayLabel(k),
       savings: g.savings / g.count,
       sparklend: g.sparklend / g.count,
       sll: g.sll / g.count,
@@ -123,7 +137,7 @@ interface EcosystemTvlChartProps {
 
 export function EcosystemTvlChart({ daily, current }: EcosystemTvlChartProps) {
   const colors = useThemeColors()
-  const [period, setPeriod] = useState<Period>("W")
+  const [period, setPeriod] = useState<Period>("M")
   const [mode, setMode] = useState<"usd" | "pct">("usd")
 
   const raw = useMemo(() => bucketWeekly(daily, period), [daily, period])
