@@ -358,11 +358,30 @@ export async function GET(request: Request) {
     const ageMs = Date.now() - (fileCached.timestamp || 0)
     const isFresh = ageMs < 3_600_000
     restoreInfinity(fileCached.positions)
-    if (isFresh) {
-      memPositions = fileCached
-      memPositionsTime = Date.now()
+
+    // Composition donuts on market-detail pages need per-asset USD amounts.
+    // Baseline snapshots frozen before that column existed only carry the
+    // symbol arrays, so re-enrich the top-100 on the first served response
+    // if they're missing. Blocks the first call (~2-3s) then memoized in
+    // memPositions so subsequent hits are fast.
+    const top100 = fileCached.positions.slice(0, 100)
+    const needsEnrichment = top100.some(
+      (p: any) => !p.collateralUsd || !p.borrowUsd
+    )
+    if (needsEnrichment) {
+      try {
+        const enriched = await fetchAssetBreakdown(top100)
+        fileCached.positions = [...enriched, ...fileCached.positions.slice(100)]
+      } catch (e: any) {
+        console.error("Baseline enrichment failed:", e.message)
+      }
     }
-    backgroundFullScan().catch(() => {})
+
+    memPositions = fileCached
+    memPositionsTime = Date.now()
+    if (isFresh) {
+      backgroundFullScan().catch(() => {})
+    }
     return paginate(fileCached)
   }
 

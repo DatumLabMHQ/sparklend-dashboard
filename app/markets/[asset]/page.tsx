@@ -19,6 +19,18 @@ import { useCachedFetch } from "@/lib/use-cached-fetch"
  * side="collateral-for": for wallets borrowing `focusSymbol`, attribute each
  *   wallet's collateral proportionally to focusSymbol's share of their borrows.
  */
+/**
+ * Case-insensitive lookup — collateralUsd/borrowUsd keys use canonical
+ * mixed case (wstETH, USDS, cbBTC) while the URL slug may arrive in any
+ * case. Match by uppercase and return the actual key/value.
+ */
+function findValue(map: Record<string, number>, focusUpper: string): number {
+  for (const [k, v] of Object.entries(map)) {
+    if (k.toUpperCase() === focusUpper) return v || 0
+  }
+  return 0
+}
+
 function computeComposition(
   positions: any[],
   focusSymbol: string,
@@ -33,7 +45,7 @@ function computeComposition(
     const debtTotal = Object.values(borrowUsd).reduce((s, v) => s + (v || 0), 0)
     if (side === "borrowed-against") {
       // Wallets with focus as collateral -> their borrows attributed by focus share.
-      const focusColl = collateralUsd[focus] || 0
+      const focusColl = findValue(collateralUsd, focus)
       if (focusColl <= 0 || collTotal <= 0) continue
       const share = focusColl / collTotal
       for (const [sym, usd] of Object.entries(borrowUsd)) {
@@ -42,7 +54,7 @@ function computeComposition(
       }
     } else {
       // Wallets borrowing focus -> their collateral attributed by focus share.
-      const focusDebt = borrowUsd[focus] || 0
+      const focusDebt = findValue(borrowUsd, focus)
       if (focusDebt <= 0 || debtTotal <= 0) continue
       const share = focusDebt / debtTotal
       for (const [sym, usd] of Object.entries(collateralUsd)) {

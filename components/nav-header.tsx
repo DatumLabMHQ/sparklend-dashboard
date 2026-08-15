@@ -3,9 +3,16 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useTheme } from "./theme-provider"
+import { prefetchData } from "@/lib/use-cached-fetch"
 
-// Prefetch API data on nav hover to speed up page loads
-const prefetchCache = new Set<string>()
+// basePath prefix for raw asset URLs. Next.js auto-prefixes <Link>, router,
+// and static imports, but a plain <img src="/x.png"> is passed straight
+// through — so we prefix it ourselves. Same var the fetch hook uses.
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || ""
+const asset = (path: string) => `${BASE_PATH}${path}`
+
+// Prefetch API data on nav hover to speed up page loads. Routes through
+// the shared cache so basePath-aware fetches deduplicate cleanly.
 const API_MAP: Record<string, string[]> = {
   "/": ["/api/sparklend", "/api/ecosystem", "/api/peers"],
   "/markets": ["/api/markets"],
@@ -18,11 +25,7 @@ const API_MAP: Record<string, string[]> = {
 function prefetchApis(href: string) {
   const apis = API_MAP[href]
   if (!apis) return
-  apis.forEach((url) => {
-    if (prefetchCache.has(url)) return
-    prefetchCache.add(url)
-    fetch(url).catch(() => prefetchCache.delete(url))
-  })
+  apis.forEach((url) => prefetchData(url))
 }
 
 const DASHBOARD_TITLE = "SparkLend Terminal"
@@ -55,7 +58,7 @@ export function NavHeader() {
             <Link href="/" className="flex items-center gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/branding/icon.png"
+                src={asset("/branding/icon.png")}
                 alt="Datum Labs"
                 width={22}
                 height={22}
