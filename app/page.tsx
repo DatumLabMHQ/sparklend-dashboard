@@ -7,17 +7,11 @@ import { PeerRevenueYoY } from "@/components/peer-revenue-yoy"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 
-function LoadingSkeleton() {
+function SectionPlaceholder({ label }: { label: string }) {
   return (
-    <div className="min-h-screen bg-background p-6 animate-pulse">
-      <div className="max-w-[1400px] mx-auto space-y-6">
-        <div className="h-8 w-64 bg-card-bg rounded" />
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-24 bg-card-bg rounded border border-card-border" />
-          ))}
-        </div>
-        <div className="h-[340px] bg-card-bg rounded border border-card-border" />
+    <div className="tui-panel h-[300px] flex items-center justify-center animate-pulse">
+      <div className="text-[10px] uppercase tracking-[0.15em] text-text-muted">
+        Loading {label}…
       </div>
     </div>
   )
@@ -29,7 +23,7 @@ function LoadingSkeleton() {
  * collateral concentration, wstETH loop, deposits Sankey) live on /markets.
  */
 export default function HomePage() {
-  const { data: ecoData, loading: ecoLoading, error: ecoError } = useCachedFetch<{
+  const { data: ecoData, error: ecoError } = useCachedFetch<{
     daily: Array<{ date: number; savings: number; sparklend: number; sll: number; total: number }>
     current: { savings: number; sparklend: number; sll: number; total: number }
   }>("/api/ecosystem", { ttl: 15 * 60_000 })
@@ -45,14 +39,11 @@ export default function HomePage() {
     window: { days: number }
   }>("/api/peer-revenue", { ttl: 15 * 60_000 })
 
-  // Only stall on skeleton during the first fetch. If the request fails,
-  // still render — each section conditionally shows whatever data it has,
-  // so a slow /api/ecosystem doesn't nuke the whole page (this was the
-  // "iframe stays blank" bug).
-  if (ecoLoading && !ecoData && !peersData && !peerRevData) {
-    return <LoadingSkeleton />
-  }
-
+  // Always render the shell — never gate on a full-page LoadingSkeleton.
+  // Every previous "iframe blank" incident was the skeleton locking on
+  // because one or more fetches hung forever. Each section below shows
+  // its own inline placeholder until its data arrives, so a hung fetch
+  // can never nuke the whole page.
   const eco = ecoData?.current
 
   return (
@@ -120,10 +111,13 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Hero: Spark Ecosystem TVL (3 product lines) */}
-        {ecoData?.daily && ecoData.daily.length > 0 && (
+        {/* Hero: Spark Ecosystem TVL (3 product lines). Inline placeholder
+            while loading so the page isn't a dark void. */}
+        {ecoData?.daily && ecoData.daily.length > 0 ? (
           <EcosystemTvlChart daily={ecoData.daily} current={ecoData.current} />
-        )}
+        ) : !ecoError ? (
+          <SectionPlaceholder label="Ecosystem TVL" />
+        ) : null}
 
         {/* Section divider */}
         <div className="tui-divider-labeled">
@@ -131,16 +125,23 @@ export default function HomePage() {
         </div>
 
         {/* Peer market share: ranked bar + share over time */}
-        {peersData?.current && peersData.daily && (
+        {peersData?.current && peersData.daily ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <PeerMarketShareRanked peers={peersData} />
             <SparkShareOverTime peers={peersData} />
           </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <SectionPlaceholder label="Market Share Ranked" />
+            <SectionPlaceholder label="Spark Share Over Time" />
+          </div>
         )}
 
         {/* Peer revenue YoY - "Spark growing while peers shrink" */}
-        {peerRevData?.peers && (
+        {peerRevData?.peers ? (
           <PeerRevenueYoY peers={peerRevData.peers} sll={peerRevData.sll} window={peerRevData.window} />
+        ) : (
+          <SectionPlaceholder label="Peer Interest Income YoY" />
         )}
       </main>
     </div>
