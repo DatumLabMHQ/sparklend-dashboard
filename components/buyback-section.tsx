@@ -236,8 +236,8 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
             >
               <defs>
                 <linearGradient id="treasuryFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
+                  <stop offset="0%" stopColor="#22c55e" stopOpacity={0.6} />
+                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.08} />
                 </linearGradient>
               </defs>
               <XAxis
@@ -288,7 +288,7 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
                 type="monotone"
                 dataKey="totalUSD"
                 stroke="#22c55e"
-                strokeWidth={1.5}
+                strokeWidth={2.5}
                 fill="url(#treasuryFill)"
               />
             </AreaChart>
