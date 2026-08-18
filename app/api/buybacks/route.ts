@@ -105,6 +105,8 @@ async function fetchPrices(addresses: Address[]): Promise<Record<string, number>
 
 async function fetchTreasuryLive(): Promise<{
   totalUSD: number
+  spkHeldUSD: number
+  spkHeldAmount: number
   lines: TreasuryLine[]
 }> {
   const balances = await client.multicall({
