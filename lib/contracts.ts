@@ -31,6 +31,30 @@ export const MCD_PAUSE_PROXY: Address =
 export const SPARK_PROXY: Address =
   "0x3300f198988e4C9C63F75dF86De36421f06af8c4"
 
+// Spark Operations Multisig — receives USDS from the SubDAO Proxy each cycle,
+// places the CoW Swap TWAP orders (USDS→SPK), and returns SPK to the SubDAO
+// Proxy. Buyback executions are visible as ERC-20 transfers on this address
+// and as filled orders in the CoW orderbook API.
+export const SPARK_OPS_MULTISIG: Address =
+  "0x2E1b01adABB8D4981863394bEa23a1263CBaeDfC"
+
+// --- Treasury assets held by SPARK_PROXY (checked against Sam MacPherson's
+// Aug 2026 "Total Treasury" chart). Extend when Phoenix Labs' monthly
+// proxy-management post adds new tokens.
+export const SPK_TOKEN: Address =
+  "0xc20059e0317DE91738d13af027DfC4a50781b066"
+export const USDC_TOKEN: Address =
+  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+export const PYUSD_TOKEN: Address =
+  "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8"
+
+export const TREASURY_ASSETS: Array<{ address: Address; symbol: string; decimals: number }> = [
+  { address: USDS_TOKEN,  symbol: "USDS",  decimals: 18 },
+  { address: USDC_TOKEN,  symbol: "USDC",  decimals: 6  },
+  { address: PYUSD_TOKEN, symbol: "PYUSD", decimals: 6  },
+  { address: SPK_TOKEN,   symbol: "SPK",   decimals: 18 },
+]
+
 // --- ABI fragments (minimal, only what we call) ---
 
 export const poolAddressesProviderAbi = [

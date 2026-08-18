@@ -3,6 +3,7 @@
 import { useMemo } from "react"
 import { ChartFrame } from "@/components/chart-frame"
 import { SpkHolderDistribution } from "@/components/spk-holder-distribution"
+import { BuybackSection } from "@/components/buyback-section"
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
@@ -253,6 +254,9 @@ export default function SpkTokenPage() {
           </ResponsiveContainer>
         </div>
       </ChartFrame>
+
+      {/* Buyback & Treasury — Sam MacPherson's Aug 2026 restart narrative */}
+      <BuybackSection currentSpkPrice={current.price} />
 
       {/* Top holders */}
       {holdersData?.holders && (
