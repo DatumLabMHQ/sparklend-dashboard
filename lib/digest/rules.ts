@@ -42,9 +42,12 @@ const formatPct = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`
 
 // Look up daily[-1] and daily[-8] on any series with { date, ...values }.
 // Returns null if there aren't 8 days of history yet.
-function weekAgo<T extends { date: number }>(
-  series: T[] | undefined
-): { latest: T; prior: T } | null {
+// Typed as `any` at the point of use because callers reach for
+// series-specific keys (sparkShare, total, sparklend, ...) that the
+// inbound API shape doesn't statically expose.
+function weekAgo(
+  series: any[] | undefined
+): { latest: any; prior: any } | null {
   if (!series || series.length < 8) return null
   return { latest: series[series.length - 1], prior: series[series.length - 8] }
 }
