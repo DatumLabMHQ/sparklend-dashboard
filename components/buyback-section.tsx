@@ -43,6 +43,7 @@ interface BuybackData {
       usdsSpent: number
       spkBought: number
       effectivePriceUSD: number
+      kind: "spk_in" | "usds_out"
     }>
     cumulativeUsdsSpent: number
     cumulativeSpkBought: number
@@ -54,11 +55,14 @@ const METHODOLOGY_TREASURY = `Spendable treasury held by the Spark SubDAO Proxy 
 
 Historical series is DefiLlama's tokensInUsd snapshot for the same address — same source Sam's chart uses. Buyback threshold is the off-chain policy target computed monthly by Phoenix Labs and posted to the Sky forum (Standard Buyback = (Treasury − Target) × 25%). Cushion = Treasury − Target. Runway = Cushion ÷ this month's TWAP budget.`
 
-const METHODOLOGY_BUYBACKS = `Buyback fills reconstructed from on-chain Transfer logs:
-• SPK inbound to Spark SubDAO Proxy from the Operations Multisig = the buyback landing home.
-• USDS outbound from Spark SubDAO Proxy to the Operations Multisig = the spend leg.
+const METHODOLOGY_BUYBACKS = `Buyback flow reconstructed from Ethplorer's address transfer history on the SubDAO Proxy (0x3300...f8c4):
 
-Pairs are matched by UTC day (CoW TWAP orders settle asynchronously). Average price = cumulative USDS spent ÷ cumulative SPK bought — a dollar-weighted VWAP across all cycles, so recent large cycles dominate.`
+• SPK inbound from the Operations Multisig (0x2E1b...edfc) = a buyback landing home. Total = "SPK acquired".
+• USDS outbound to the Operations Multisig = TWAP funding round. Total = "USDS spent".
+
+The two legs are NOT paired 1:1 per transaction: CoW TWAP orders settle asynchronously across days, so a single USDS round can fund multiple SPK-in transfers and vice versa. The dashboard reports each leg as its own total and shows the flow in the table below labelled by direction. Average price = cumulative USDS ÷ cumulative SPK across the entire program.
+
+Cross-check: Spark tweeted on 2026-08-18 "over 100M SPK bought back, $2.1M protocol revenue toward that." Our on-chain read: ~94M SPK bought (4 cycles) and ~$3.8M USDS deployed (6 rounds). The gap is unspent USDS still sitting in the Ops Multisig ahead of the next TWAP settlement — Spark's $2.1M appears to be the CoW-settled portion only.`
 
 function formatCurrency(v: number, digits = 1): string {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(digits)}B`
@@ -96,10 +100,13 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
     }))
   }, [data])
 
-  // Cumulative buyback spend over time, bucketed weekly, for the pace chart.
+  // Weekly USDS spend for the pace chart. Only usds_out rows count as spend;
+  // spk_in rows are the receipt side of the same flow and would double-count.
   const paceChart = useMemo(() => {
     if (!data?.buybacks.fills?.length) return []
-    const fills = [...data.buybacks.fills].sort((a, b) => a.timestamp - b.timestamp)
+    const fills = data.buybacks.fills
+      .filter((f) => f.kind === "usds_out")
+      .sort((a, b) => a.timestamp - b.timestamp)
     const weekly = new Map<string, { usdsSpent: number; spkBought: number }>()
     for (const f of fills) {
       const d = new Date(f.timestamp * 1000)
@@ -402,8 +409,8 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
                     : "#F26B68",
               },
               {
-                label: "Cycles Executed",
-                value: buybacks.fills.length.toString(),
+                label: "SPK Cycles / USDS Rounds",
+                value: `${buybacks.fills.filter((f) => f.kind === "spk_in").length} / ${buybacks.fills.filter((f) => f.kind === "usds_out").length}`,
               },
             ].map((row) => (
               <div
@@ -436,10 +443,11 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
       <div className="tui-panel p-4">
         <div className="flex items-baseline justify-between mb-3">
           <h3 className="text-[11px] font-bold uppercase tracking-[0.1em] text-accent">
-            Recent Buyback Cycles
+            Recent Buyback Flow
           </h3>
           <span className="text-[10px] text-text-muted">
             latest {Math.min(buybacks.fills.length, 12)} of {buybacks.fills.length}
+            {" · SPK-in are settled buys, USDS-out are TWAP funding rounds"}
           </span>
         </div>
         {buybacks.fills.length === 0 ? (
@@ -452,31 +460,40 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
               <thead>
                 <tr className="text-[10px] uppercase tracking-[0.05em] text-text-muted border-b border-card-border">
                   <th className="text-left py-2 px-2">Date</th>
-                  <th className="text-right py-2 px-2">USDS Spent</th>
-                  <th className="text-right py-2 px-2">SPK Bought</th>
-                  <th className="text-right py-2 px-2">Effective Price</th>
+                  <th className="text-left py-2 px-2">Type</th>
+                  <th className="text-right py-2 px-2">USDS Out</th>
+                  <th className="text-right py-2 px-2">SPK In</th>
                   <th className="text-right py-2 px-2">Tx</th>
                 </tr>
               </thead>
               <tbody>
                 {buybacks.fills.slice(0, 12).map((f) => (
                   <tr
-                    key={f.txHash}
+                    key={f.txHash + f.kind}
                     className="border-b border-card-border/40 last:border-b-0"
                   >
                     <td className="py-2 px-2 text-text-secondary">
                       {formatDate(f.timestamp)}
                     </td>
+                    <td className="py-2 px-2">
+                      <span
+                        className="text-[10px] uppercase tracking-[0.05em] px-1.5 py-0.5 rounded-sm"
+                        style={{
+                          color: f.kind === "spk_in" ? "#22c55e" : "#FF6B35",
+                          backgroundColor:
+                            f.kind === "spk_in"
+                              ? "rgba(34,197,94,0.08)"
+                              : "rgba(255,107,53,0.08)",
+                        }}
+                      >
+                        {f.kind === "spk_in" ? "SPK in" : "USDS out"}
+                      </span>
+                    </td>
                     <td className="text-right py-2 px-2 tabular-nums text-text-primary">
                       {f.usdsSpent > 0 ? formatCurrency(f.usdsSpent, 2) : "—"}
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-text-primary">
-                      {formatSpk(f.spkBought)}
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-text-secondary">
-                      {f.effectivePriceUSD > 0
-                        ? `$${f.effectivePriceUSD.toFixed(5)}`
-                        : "—"}
+                      {f.spkBought > 0 ? formatSpk(f.spkBought) : "—"}
                     </td>
                     <td className="text-right py-2 px-2">
                       <a

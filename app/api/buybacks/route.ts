@@ -29,6 +29,7 @@ interface BuybackFill {
   usdsSpent: number
   spkBought: number
   effectivePriceUSD: number
+  kind: "spk_in" | "usds_out"
 }
 
 interface BuybackResponse {
@@ -184,96 +185,87 @@ async function fetchTreasuryHistorical(): Promise<
 // ── Buyback fills ────────────────────────────────────────────────────────────
 
 /**
- * SPK Transfers where `to = SPARK_PROXY` and `from = SPARK_OPS_MULTISIG` are
- * completed buybacks landing home. Pairing them with the corresponding USDS
- * Transfer where `from = SPARK_PROXY` and `to = SPARK_OPS_MULTISIG` (same tx
- * or near-by block) gives us the spend leg.
+ * Buyback fills reconstructed from Ethplorer's address transfer history.
  *
- * Cheaper than the CoW orderbook API for a first version and doesn't require
- * an extra auth flow. If per-fill precision matters later we can layer CoW's
- * settlement data in.
+ * SPK inbound to the SubDAO Proxy from the Ops Multisig is a buyback landing
+ * home. USDS outbound from the SubDAO Proxy to the Ops Multisig is the spend
+ * leg funding a future TWAP round. We report them as two aggregate totals
+ * plus per-transfer detail — pairing them per-cycle isn't robust because
+ * CoW TWAP orders settle asynchronously across days, so a single USDS
+ * outflow can span multiple SPK-in transfers and vice versa.
+ *
+ * Ethplorer's `getAddressHistory` is used instead of raw eth_getLogs because
+ * public RPCs reject the wide block range needed to catch the earliest
+ * cycles, and the code path that fell back on chunked scans was returning 0
+ * fills against ~4 real cycles totaling ~94M SPK on-chain (confirmed via
+ * Spark's own "over 100M SPK bought back" announcement on 2026-08-18).
  */
-async function fetchBuybackFills(): Promise<BuybackFill[]> {
-  const currentBlock = await client.getBlockNumber()
-  // Buybacks resumed 2026-08-15 per Sam's tweet; go back ~1yr of history to
-  // cover the initial launch cycles too. Chunked to keep the free RPCs happy.
-  const START_BLOCK = currentBlock - 2_500_000n
-  const CHUNK = 500_000n
+type EthplorerOp = {
+  timestamp: number
+  transactionHash: string
+  value: string
+  from: string
+  to: string
+}
 
+async function ethplorerTransfers(
+  addressLower: string,
+  tokenLower: string,
+  apiKey: string
+): Promise<EthplorerOp[]> {
+  const url = `https://api.ethplorer.io/getAddressHistory/${addressLower}?apiKey=${apiKey}&type=transfer&token=${tokenLower}&limit=100`
+  const res = await fetch(url, { next: { revalidate: 900 } })
+  if (!res.ok) throw new Error(`ethplorer ${res.status}`)
+  const data = await res.json()
+  return (data?.operations || []) as EthplorerOp[]
+}
+
+async function fetchBuybackFills(): Promise<BuybackFill[]> {
   const SPK: Address = TREASURY_ASSETS.find((a) => a.symbol === "SPK")!.address
   const USDS: Address = TREASURY_ASSETS.find((a) => a.symbol === "USDS")!.address
+  const proxy = SPARK_PROXY.toLowerCase()
+  const ops = SPARK_OPS_MULTISIG.toLowerCase()
+  const apiKey = process.env.ETHPLORER_API_KEY || "freekey"
 
-  const spkLogs: any[] = []
-  const usdsLogs: any[] = []
-
-  for (let from = START_BLOCK; from <= currentBlock; from += CHUNK) {
-    const to = from + CHUNK - 1n > currentBlock ? currentBlock : from + CHUNK - 1n
-    try {
-      const [spkChunk, usdsChunk] = await Promise.all([
-        client.getLogs({
-          address: SPK,
-          event: transferEvent,
-          args: { from: SPARK_OPS_MULTISIG, to: SPARK_PROXY },
-          fromBlock: from,
-          toBlock: to,
-        }),
-        client.getLogs({
-          address: USDS,
-          event: transferEvent,
-          args: { from: SPARK_PROXY, to: SPARK_OPS_MULTISIG },
-          fromBlock: from,
-          toBlock: to,
-        }),
-      ])
-      spkLogs.push(...spkChunk)
-      usdsLogs.push(...usdsChunk)
-    } catch (e: any) {
-      console.error(`buyback logs [${from}..${to}]:`, e.message)
-    }
+  let spkOps: EthplorerOp[]
+  let usdsOps: EthplorerOp[]
+  try {
+    ;[spkOps, usdsOps] = await Promise.all([
+      ethplorerTransfers(proxy, SPK.toLowerCase(), apiKey),
+      ethplorerTransfers(proxy, USDS.toLowerCase(), apiKey),
+    ])
+  } catch (e: any) {
+    console.error("buyback fills fetch:", e.message)
+    return []
   }
 
-  // Timestamp lookup — batch by unique block.
-  const uniqueBlocks = Array.from(
-    new Set([...spkLogs, ...usdsLogs].map((l) => l.blockNumber))
-  )
-  const tsByBlock = new Map<bigint, number>()
-  for (const bn of uniqueBlocks) {
-    try {
-      const b = await client.getBlock({ blockNumber: bn })
-      tsByBlock.set(bn, Number(b.timestamp))
-    } catch {
-      /* skip */
-    }
-  }
+  // SPK inbound from Ops Multisig = buyback landing home.
+  const spkFills = spkOps
+    .filter((op) => op.from?.toLowerCase() === ops && op.to?.toLowerCase() === proxy)
+    .map((op) => ({
+      timestamp: Number(op.timestamp),
+      txHash: op.transactionHash,
+      spkBought: Number(formatUnits(BigInt(op.value), 18)),
+      usdsSpent: 0,
+      effectivePriceUSD: 0,
+      kind: "spk_in" as const,
+    }))
 
-  // Pair SPK-in and USDS-out. Cycles are typically minutes apart; matching by
-  // day is loose enough to survive CoW's async settlement and tight enough to
-  // avoid conflating multiple cycles.
-  const buys: BuybackFill[] = []
-  const consumedUsds = new Set<number>()
-  for (const spk of spkLogs) {
-    const spkTs = tsByBlock.get(spk.blockNumber) ?? 0
-    const spkDay = Math.floor(spkTs / 86400)
-    const usdsMatchIdx = usdsLogs.findIndex((u, i) => {
-      if (consumedUsds.has(i)) return false
-      const ts = tsByBlock.get(u.blockNumber) ?? 0
-      return Math.floor(ts / 86400) === spkDay
-    })
-    const usds = usdsMatchIdx >= 0 ? usdsLogs[usdsMatchIdx] : null
-    if (usdsMatchIdx >= 0) consumedUsds.add(usdsMatchIdx)
+  // USDS outbound to Ops Multisig = future TWAP funding. Reported as its own
+  // fill row so users can see both legs of the flow; the SPK-in rows carry
+  // the actual purchase quantity, the USDS-out rows carry the actual spend.
+  const usdsFills = usdsOps
+    .filter((op) => op.from?.toLowerCase() === proxy && op.to?.toLowerCase() === ops)
+    .map((op) => ({
+      timestamp: Number(op.timestamp),
+      txHash: op.transactionHash,
+      spkBought: 0,
+      usdsSpent: Number(formatUnits(BigInt(op.value), 18)),
+      effectivePriceUSD: 0,
+      kind: "usds_out" as const,
+    }))
 
-    const spkBought = Number(formatUnits(spk.args.value as bigint, 18))
-    const usdsSpent = usds ? Number(formatUnits(usds.args.value as bigint, 18)) : 0
-    buys.push({
-      timestamp: spkTs,
-      txHash: spk.transactionHash,
-      usdsSpent,
-      spkBought,
-      effectivePriceUSD: usdsSpent > 0 && spkBought > 0 ? usdsSpent / spkBought : 0,
-    })
-  }
-
-  return buys.sort((a, b) => b.timestamp - a.timestamp)
+  return [...spkFills, ...usdsFills].sort((a, b) => b.timestamp - a.timestamp)
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -291,7 +283,7 @@ export async function GET() {
       return r
     }),
     fetchBuybackFills().then((r) => {
-      sources.push("eth_getLogs Transfer")
+      sources.push("ethplorer address transfers")
       return r
     }),
   ])
@@ -301,8 +293,15 @@ export async function GET() {
   const cushionMonths =
     threshold.monthlyBudgetUSD > 0 ? cushionUSD / threshold.monthlyBudgetUSD : null
 
-  const cumulativeUsdsSpent = fills.reduce((s, f) => s + f.usdsSpent, 0)
-  const cumulativeSpkBought = fills.reduce((s, f) => s + f.spkBought, 0)
+  // Sum each leg independently — SPK-in and USDS-out are two sides of the
+  // same buyback flow but they don't land 1:1 per tx (CoW TWAP orders settle
+  // asynchronously across days), so pairing per-row would misreport pace.
+  const cumulativeSpkBought = fills
+    .filter((f) => f.kind === "spk_in")
+    .reduce((s, f) => s + f.spkBought, 0)
+  const cumulativeUsdsSpent = fills
+    .filter((f) => f.kind === "usds_out")
+    .reduce((s, f) => s + f.usdsSpent, 0)
   const avgPriceUSD =
     cumulativeSpkBought > 0 ? cumulativeUsdsSpent / cumulativeSpkBought : null
 
