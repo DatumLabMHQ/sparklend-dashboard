@@ -326,55 +326,50 @@ function computeFlashFees(
   return map
 }
 
-// Amortize each monthly Distribution Reward payment across the days between
-// the prior payment (or Sept 1, 2025 for the first payment) and this payment's
-// day. For days after the latest payment, carry forward at the trailing daily
-// rate so the current-month bar isn't visually empty.
+// Rate-accrual approximation for Distribution Rewards, matching the Blockworks
+// Research methodology.
+//
+// Per the Sky Agent Framework spec, Distribution Rewards accrue at ~20 bps/yr
+// base + up to +30 bps/yr boost on TAGGED USDS balance (USDS held via Spark-
+// referred products: spUSDT / sUSDS / stakedUSDS / etc). Settlement is ONCE per
+// Monthly Settlement Cycle as a USDS mint from the Sky Pause Proxy.
+//
+// The previous implementation amortized each on-chain mint across only the
+// days between it and the prior mint. That produced two failure modes:
+//   1. Backlog settlements spike the month they land. Sam MacPherson noted on
+//      2026-08-15 that a multi-month backlog arrived in July 2026 — attributing
+//      that lump to only the July days pushed our July DR to $3.10M vs
+//      Blockworks' $1.62M.
+//   2. Days after the latest mint carried forward at the last per-day rate,
+//      which is whatever the last cycle happened to spread to — including
+//      backlog spike rates.
+//
+// New approach: distribute total cumulative mints evenly across every day from
+// program launch (Sept 1, 2025) to today. Individual mint-date spikes go away;
+// monthly totals converge on the rate-accrual definition that Blockworks uses.
+// A future refinement can weight by per-product tagged USDS balance for month-
+// level accuracy, but the flat-rate estimate already collapses the July gap.
 function computeDistributionRewards(): Map<number, number> {
   const map = new Map<number, number>()
   const cache = loadDistCache()
   if (cache.events.length === 0) return map
 
-  // Sort by timestamp ascending
-  const events = [...cache.events].sort((a, b) => a.timestamp - b.timestamp)
+  const totalUSD = cache.events.reduce(
+    (sum, ev) => sum + Number(BigInt(ev.amount)) / 1e18,
+    0
+  )
+  if (totalUSD <= 0) return map
 
-  // Distribution Rewards launched Sept 2025 (first spell Sept 18, 2025). Use
-  // Sept 1, 2025 as the amortization anchor so the first payment spreads over
-  // its full "for" period rather than a single-day spike.
   const ANCHOR_TS = Math.floor(new Date("2025-09-01T00:00:00Z").getTime() / 1000)
-  let prevBoundary = ANCHOR_TS
-  let lastRate = 0 // USD per day, used to carry forward past the latest payment
+  const now = Math.floor(Date.now() / 1000)
+  const daysElapsed = Math.max(1, Math.round((now - ANCHOR_TS) / 86400))
+  const dailyRate = totalUSD / daysElapsed
 
-  for (const ev of events) {
-    // USDS has 18 decimals; ~$1.00 by peg. Using 1.0 avoids depending on a
-    // spot price API for a stablecoin.
-    const usdAmount = Number(BigInt(ev.amount)) / 1e18
-    if (usdAmount <= 0) continue
-
-    // Each payment covers (prevBoundary, thisPayment] — exclusive of prev day,
-    // inclusive of payment day. This makes windows tile without gaps or overlap.
-    const startDay = dayTs(prevBoundary) + 86400
-    const endDay = dayTs(ev.timestamp)
-    const dayCount = Math.max(1, Math.round((endDay - startDay) / 86400) + 1)
-    const perDay = usdAmount / dayCount
-
-    for (let d = startDay; d <= endDay; d += 86400) {
-      map.set(d, (map.get(d) || 0) + perDay)
-    }
-
-    lastRate = perDay
-    prevBoundary = ev.timestamp
+  const startDay = dayTs(ANCHOR_TS)
+  const todayDay = dayTs(now)
+  for (let d = startDay; d <= todayDay; d += 86400) {
+    map.set(d, dailyRate)
   }
-
-  // Forward-fill from the day after the latest payment up to today at the
-  // trailing daily rate. Honest note: this is an estimate — actual accrual
-  // won't be known until the next monthly settlement.
-  const today = dayTs(Math.floor(Date.now() / 1000))
-  const startFill = dayTs(prevBoundary) + 86400
-  for (let d = startFill; d <= today; d += 86400) {
-    map.set(d, (map.get(d) || 0) + lastRate)
-  }
-
   return map
 }
 
