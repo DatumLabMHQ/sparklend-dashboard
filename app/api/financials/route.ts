@@ -526,15 +526,31 @@ export async function GET() {
 
     // Fetch DefiLlama data + token info (the fast stuff)
     // sparklend = the lending pool itself (net interest income + flash + liq)
-    // spark-liquidity-layer = ALM Proxy deployments into Morpho/Aave/Ethena/Curve/etc (yield - funding cost)
-    const [feesData, revenueData, supplySideData, sllRevenueData, tokenInfo] =
+    // spark-liquidity-layer = ALM Proxy deployments into Morpho/Aave/Ethena/Curve/etc
+    //   - dailyFees:   gross yield across ALL SLL strategy positions (correct)
+    //   - dailyRevenue: dailyFees minus Sky Base Rate applied to the whole
+    //     base — but only the residual ~$10M USDC/USDS float shows up in
+    //     DefiLlama's SLL TVL, so the Sky Base Rate subtraction is
+    //     over-scaled and pushes recent months negative. We use dailyFees
+    //     and apply Blockworks' effective spread ratio instead (see SLL
+    //     reconciliation notes below).
+    const [feesData, revenueData, supplySideData, sllFeesData, tokenInfo] =
       await Promise.all([
         fetchDefiLlamaFees("sparklend", "dailyFees"),
         fetchDefiLlamaFees("sparklend", "dailyRevenue"),
         fetchDefiLlamaFees("sparklend", "dailySupplySideRevenue"),
-        fetchDefiLlamaFees("spark-liquidity-layer", "dailyRevenue"),
+        fetchDefiLlamaFees("spark-liquidity-layer", "dailyFees"),
         getTokenInfo(),
       ])
+
+    // Blockworks-matching SLL revenue = dailyFees × spread ratio.
+    // Spread ratio is the fraction of gross SLL yield retained after Sky
+    // Base Rate + sUSDS DSR funding costs. Anchored to the Blockworks
+    // July 2026 datapoint (\$965K net / \$5.49M gross = 17.6%). Real ratio
+    // varies day-to-day with strategy mix, but a snapshot approximation
+    // gets us within methodology noise; per-strategy on-chain read for
+    // the exact spread is queued as a follow-up.
+    const SLL_SPREAD_RATIO = 0.176
 
     const priceMap = await getPriceMap(tokenInfo.addresses)
     const currentBlock = Number(await client.getBlockNumber())
@@ -570,7 +586,10 @@ export async function GET() {
     const supplyMap = new Map<number, number>()
     for (const [ts, val] of supplySideData) supplyMap.set(ts, val)
     const sllMap = new Map<number, number>()
-    for (const [ts, val] of sllRevenueData) sllMap.set(ts, val)
+    for (const [ts, val] of sllFeesData) {
+      // Convert gross → Blockworks-net using the spread ratio.
+      sllMap.set(ts, val * SLL_SPREAD_RATIO)
+    }
 
     // ---- Estimate historical fee ratios ----
     // For days where we have on-chain data, compute the ratio of
