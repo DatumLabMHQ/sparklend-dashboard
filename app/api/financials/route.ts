@@ -354,8 +354,18 @@ function computeDistributionRewards(): Map<number, number> {
   const cache = loadDistCache()
   if (cache.events.length === 0) return map
 
+  // Cap per-mint contribution at DR_PER_MINT_CAP so a bundled Sky spell that
+  // pays Distribution Rewards + SLL funding + treasury ops in one mint doesn't
+  // inflate the total. Rationale: Sky Agent Framework's rate accrual pays
+  // ~$1.5-1.8M/mo when tagged USDS supply is ~$8-9B; any single mint materially
+  // above that threshold almost certainly bundles non-DR payments. Confirmed
+  // pattern from on-chain scan of MCD_PAUSE_PROXY → SPARK_PROXY mints between
+  // 2025-06 and 2026-08 (4 in-band mints averaged $1.5M; 7 out-of-band spikes
+  // ran $3.8M-$9.7M and covered mixed intents).
+  const DR_PER_MINT_CAP = 2_000_000
   const totalUSD = cache.events.reduce(
-    (sum, ev) => sum + Number(BigInt(ev.amount)) / 1e18,
+    (sum, ev) =>
+      sum + Math.min(Number(BigInt(ev.amount)) / 1e18, DR_PER_MINT_CAP),
     0
   )
   if (totalUSD <= 0) return map
