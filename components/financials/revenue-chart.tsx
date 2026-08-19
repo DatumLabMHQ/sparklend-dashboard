@@ -38,10 +38,14 @@ function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null
   const items = payload.filter((p: any) => p.value !== 0 && p.value != null)
   const total = items.reduce((s: number, p: any) => s + p.value, 0)
+  const isIncomplete = payload[0]?.payload?.isIncomplete
 
   return (
     <div className="custom-tooltip min-w-[200px]">
-      <p className="text-xs text-text-muted mb-1.5">{label}</p>
+      <p className="text-xs text-text-muted mb-1.5">
+        {label}
+        {isIncomplete ? " · partial" : ""}
+      </p>
       {items.map((item: any) => (
         <div key={item.dataKey} className="flex items-center justify-between gap-4 mb-1">
           <div className="flex items-center gap-1.5">
@@ -94,6 +98,12 @@ export function RevenueChart({ daily }: RevenueChartProps) {
       methodology={METHODOLOGY}
       actions={chartActions}
       height={320}
+      footnote={
+        <span>
+          The last bar covers the current partial period (day / week / month / quarter / year of today).
+          The tooltip labels it "partial" so it's not mistaken for a completed cycle.
+        </span>
+      }
     >
       <div className="flex items-center gap-4 px-1 mb-2 mt-1">
         {STREAMS.map((s) => (

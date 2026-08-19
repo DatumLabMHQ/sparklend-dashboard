@@ -5,11 +5,23 @@ interface DailyEntry {
   [key: string]: number
 }
 
+// Week key = ISO Monday of that week, formatted as e.g. "Aug 12 '26".
+// Previously returned "W33 2026" which forced users to decode ISO week
+// numbers. Grouping still works because Mondays are unique per week.
 function getWeekKey(ts: number): string {
   const d = new Date(ts * 1000)
-  const jan1 = new Date(d.getFullYear(), 0, 1)
-  const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7)
-  return `W${week} ${d.getFullYear()}`
+  const day = d.getUTCDay()
+  const mondayOffset = (day + 6) % 7
+  const monday = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayOffset)
+  )
+  return (
+    monday.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }) + ` '${String(monday.getUTCFullYear()).slice(2)}`
+  )
 }
 
 function getMonthKey(ts: number): string {
@@ -38,7 +50,7 @@ export function aggregateData(
   daily: DailyEntry[],
   period: Period,
   valueKeys: string[],
-  opts: { dropIncomplete?: boolean } = { dropIncomplete: true }
+  opts: { dropIncomplete?: boolean } = {}
 ): Array<Record<string, any>> {
   if (period === "D") {
     return daily.map((d) => {
@@ -76,12 +88,15 @@ export function aggregateData(
     })
   }
 
-  // Drop the trailing bucket if it's the CURRENT period — i.e., its key matches
-  // the key for today. This prevents a visually-low last bar caused by a
-  // partial week/month/quarter/year. Default: on.
+  // Default: KEEP the current partial period. Callers can still opt into the
+  // old "drop the incomplete bar" behaviour by passing dropIncomplete: true.
+  // Flag the current bucket as `isIncomplete` so the chart can style it
+  // differently (dashed border, lower opacity) — users are surprised when
+  // "August" is missing on Aug 18, and hiding the bar wholesale loses the
+  // signal that the month is in-flight.
+  const nowKey = getKey(Math.floor(Date.now() / 1000))
   let output = order
-  if (opts.dropIncomplete !== false && order.length > 0) {
-    const nowKey = getKey(Math.floor(Date.now() / 1000))
+  if (opts.dropIncomplete === true && order.length > 0) {
     if (order[order.length - 1] === nowKey) {
       output = order.slice(0, -1)
     }
@@ -89,6 +104,7 @@ export function aggregateData(
 
   return output.map((key) => ({
     label: key,
+    isIncomplete: key === nowKey,
     ...groups.get(key)!,
   }))
 }
