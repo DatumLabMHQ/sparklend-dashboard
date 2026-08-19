@@ -94,6 +94,90 @@ async function getTokenInfo(): Promise<{
   return { symbolMap, decimalsMap, addresses }
 }
 
+/**
+ * Compute the share of current SparkLend protocol revenue that comes from
+ * USDS and DAI reserves. Used to strip those two assets out of the historical
+ * revenue series so our Sparklend line matches Blockworks Research's methodology
+ * (they explicitly exclude USDS and DAI reserves — the SubDAO earns DR on those
+ * via Sky's Agent Framework instead of via SparkLend's reserve factor).
+ *
+ * Approach: for each reserve, compute daily protocol interest =
+ *   totalVariableDebt × variableBorrowRate × reserveFactor
+ * All rates in Aave-fork RAY (1e27) scale; reserve factor in bps (÷10_000).
+ * Return share = (USDS + DAI daily) / (all reserves daily).
+ *
+ * This is a snapshot ratio applied uniformly to the historical aggregate.
+ * A per-day per-asset backfill would require reading past-block reserve data
+ * which is expensive; the snapshot ratio is a reasonable first approximation
+ * for a series where USDS/DAI's share of borrows tends to move slowly.
+ */
+async function computeUsdsDaiRevenueShare(
+  addresses: Address[],
+  symbolMap: Record<string, string>,
+  decimalsMap: Record<string, number>,
+  priceMap: Record<string, number>
+): Promise<number> {
+  try {
+    const dataProviderAddr = (await client.readContract({
+      address: POOL_ADDRESSES_PROVIDER,
+      abi: poolAddressesProviderAbi,
+      functionName: "getPoolDataProvider",
+    })) as Address
+
+    const reserveDataCalls = addresses.map((addr) => ({
+      address: dataProviderAddr,
+      abi: poolDataProviderAbi,
+      functionName: "getReserveData" as const,
+      args: [addr] as const,
+    }))
+    const reserveConfigCalls = addresses.map((addr) => ({
+      address: dataProviderAddr,
+      abi: poolDataProviderAbi,
+      functionName: "getReserveConfigurationData" as const,
+      args: [addr] as const,
+    }))
+
+    const [reserveData, reserveConfigs] = await Promise.all([
+      client.multicall({ contracts: reserveDataCalls, allowFailure: true }),
+      client.multicall({ contracts: reserveConfigCalls, allowFailure: true }),
+    ])
+
+    let total = 0
+    let usdsDai = 0
+    for (let i = 0; i < addresses.length; i++) {
+      const rd = reserveData[i]
+      const rc = reserveConfigs[i]
+      if (rd.status !== "success" || rc.status !== "success") continue
+
+      const addr = addresses[i].toLowerCase()
+      const symbol = (symbolMap[addr] || "").toUpperCase()
+      const decimals = decimalsMap[addr] ?? 18
+      const price = priceMap[addr] ?? 0
+
+      const rdArr = rd.result as any
+      const rcArr = rc.result as any
+      const totalVariableDebt = BigInt(rdArr[4] ?? 0)
+      const variableBorrowRate = BigInt(rdArr[6] ?? 0)
+      const reserveFactor = BigInt(rcArr[4] ?? 0)
+
+      const debtUsd =
+        (Number(totalVariableDebt) / Math.pow(10, decimals)) * price
+      const rate = Number(variableBorrowRate) / 1e27
+      const rf = Number(reserveFactor) / 10_000
+
+      const dailyProtRev = debtUsd * rate * rf // annual-USD; ratio use only
+      total += dailyProtRev
+      if (symbol === "USDS" || symbol === "DAI") usdsDai += dailyProtRev
+    }
+
+    if (total <= 0) return 0
+    return usdsDai / total
+  } catch (e: any) {
+    console.error("USDS/DAI share calc:", e.message?.slice(0, 100))
+    return 0
+  }
+}
+
 async function getPriceMap(
   addresses: Address[]
 ): Promise<Record<string, number>> {
@@ -455,6 +539,18 @@ export async function GET() {
     const priceMap = await getPriceMap(tokenInfo.addresses)
     const currentBlock = Number(await client.getBlockNumber())
 
+    // Snapshot ratio: what fraction of today's SparkLend protocol revenue
+    // comes from USDS + DAI. Applied uniformly to the historical Sparklend
+    // (netInterestIncome) series so our line matches Blockworks Research's
+    // methodology, which strips those two assets.
+    const usdsDaiShare = await computeUsdsDaiRevenueShare(
+      tokenInfo.addresses,
+      tokenInfo.symbolMap,
+      tokenInfo.decimalsMap,
+      priceMap
+    )
+    const sparkLendKeepFactor = 1 - usdsDaiShare
+
     // Compute fee breakdowns from file caches (fast, no RPC calls)
     const dailyFlashFeesOnChain = computeFlashFees(
       currentBlock,
@@ -530,10 +626,12 @@ export async function GET() {
         liquidationFees = revenue * liqRatio
       }
 
-      const netInterestIncome = Math.max(
-        0,
-        revenue - flashloanFees - liquidationFees
-      )
+      // Blockworks Research's Sparklend line excludes USDS + DAI reserves
+      // (they're covered by Sky's Distribution Rewards instead). Strip that
+      // share from netInterestIncome so our stack reconciles with theirs.
+      const netInterestIncome =
+        Math.max(0, revenue - flashloanFees - liquidationFees) *
+        sparkLendKeepFactor
 
       return {
         date: timestamp,
