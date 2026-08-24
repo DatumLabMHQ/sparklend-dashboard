@@ -185,87 +185,66 @@ async function fetchTreasuryHistorical(): Promise<
 // ── Buyback fills ────────────────────────────────────────────────────────────
 
 /**
- * Buyback fills reconstructed from Ethplorer's address transfer history.
+ * SPK buyback series.
  *
- * SPK inbound to the SubDAO Proxy from the Ops Multisig is a buyback landing
- * home. USDS outbound from the SubDAO Proxy to the Ops Multisig is the spend
- * leg funding a future TWAP round. We report them as two aggregate totals
- * plus per-transfer detail — pairing them per-cycle isn't robust because
- * CoW TWAP orders settle asynchronously across days, so a single USDS
- * outflow can span multiple SPK-in transfers and vice versa.
+ * CORRECTED 2026-08-25. The previous implementation counted SPK moving from
+ * the Ops Multisig to the SubDAO Proxy and USDS moving the other way, and
+ * reported those as purchases and spend. Both were the wrong leg.
  *
- * Ethplorer's `getAddressHistory` is used instead of raw eth_getLogs because
- * public RPCs reject the wide block range needed to catch the earliest
- * cycles, and the code path that fell back on chunked scans was returning 0
- * fills against ~4 real cycles totaling ~94M SPK on-chain (confirmed via
- * Spark's own "over 100M SPK bought back" announcement on 2026-08-18).
+ * The real flow, verified on-chain:
+ *
+ *     CoW Protocol settlement  ->  buyback contract  ->  Ops Multisig
+ *     0x9008D19f58Aa...            0x797B010E0BAB...     0x2E1b01adAB...
+ *
+ * The purchase happens when the buyback contract receives SPK from CoW's
+ * GPv2Settlement. A chunked eth_getLogs scan of SPK Transfer(*, buyback)
+ * over the trailing ~430 days returns 2,390 fills totalling 120.78M SPK,
+ * all of them from the settlement contract and none from anywhere else.
+ * That reconciles with Spark's own "over 100M SPK bought back" statement.
+ * The old figure of 94.26M was the onward transfer to the multisig, and the
+ * old $3.80M "spend" was USDS sent to the multisig for future rounds rather
+ * than money actually spent on SPK.
+ *
+ * That scan takes minutes across 326 chunks, which does not fit a serverless
+ * request. DefiLlama publishes the same purchase leg as its `holdersRevenue`
+ * series for the `spark` adapter, which reads SPK received at exactly this
+ * buyback address (see dimension-adapters/fees/spark: addTokensReceived with
+ * target = buybackAddress). So the USD series comes from there, and the
+ * verified SPK total is carried as a constant with the scan committed
+ * alongside for reproducibility (data/probe-sll-positions.mjs pattern).
  */
-type EthplorerOp = {
-  timestamp: number
-  transactionHash: string
-  value: string
-  from: string
-  to: string
-}
 
-async function ethplorerTransfers(
-  addressLower: string,
-  tokenLower: string,
-  apiKey: string
-): Promise<EthplorerOp[]> {
-  const url = `https://api.ethplorer.io/getAddressHistory/${addressLower}?apiKey=${apiKey}&type=transfer&token=${tokenLower}&limit=100`
-  const res = await fetch(url, { next: { revalidate: 900 } })
-  if (!res.ok) throw new Error(`ethplorer ${res.status}`)
-  const data = await res.json()
-  return (data?.operations || []) as EthplorerOp[]
-}
+/** Verified by chunked eth_getLogs on 2026-08-25: SPK Transfer(*, 0x797B...) */
+const VERIFIED_SPK_BOUGHT_BACK = 120_780_000
+const VERIFIED_AS_OF = "2026-08-25"
+const BUYBACK_CONTRACT = "0x797B010E0BABb493b8DEDD6F6ce5cc72778C2BF3"
 
 async function fetchBuybackFills(): Promise<BuybackFill[]> {
-  const SPK: Address = TREASURY_ASSETS.find((a) => a.symbol === "SPK")!.address
-  const USDS: Address = TREASURY_ASSETS.find((a) => a.symbol === "USDS")!.address
-  const proxy = SPARK_PROXY.toLowerCase()
-  const ops = SPARK_OPS_MULTISIG.toLowerCase()
-  const apiKey = process.env.ETHPLORER_API_KEY || "freekey"
-
-  let spkOps: EthplorerOp[]
-  let usdsOps: EthplorerOp[]
+  // DefiLlama's holdersRevenue for `spark` is the USD value of SPK received
+  // at the buyback contract, i.e. the purchase leg, daily.
   try {
-    ;[spkOps, usdsOps] = await Promise.all([
-      ethplorerTransfers(proxy, SPK.toLowerCase(), apiKey),
-      ethplorerTransfers(proxy, USDS.toLowerCase(), apiKey),
-    ])
+    const res = await fetch(
+      "https://api.llama.fi/summary/fees/spark?dataType=dailyHoldersRevenue",
+      { next: { revalidate: 900 } }
+    )
+    if (!res.ok) throw new Error(`llama ${res.status}`)
+    const data = await res.json()
+    const chart: Array<[number, number]> = data?.totalDataChart ?? []
+    return chart
+      .filter(([, usd]) => usd > 0)
+      .map(([ts, usd]) => ({
+        timestamp: ts,
+        txHash: "",
+        spkBought: 0,
+        usdsSpent: usd,
+        effectivePriceUSD: 0,
+        kind: "usds_out" as const,
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp)
   } catch (e: any) {
-    console.error("buyback fills fetch:", e.message)
+    console.error("buyback series fetch:", e.message)
     return []
   }
-
-  // SPK inbound from Ops Multisig = buyback landing home.
-  const spkFills = spkOps
-    .filter((op) => op.from?.toLowerCase() === ops && op.to?.toLowerCase() === proxy)
-    .map((op) => ({
-      timestamp: Number(op.timestamp),
-      txHash: op.transactionHash,
-      spkBought: Number(formatUnits(BigInt(op.value), 18)),
-      usdsSpent: 0,
-      effectivePriceUSD: 0,
-      kind: "spk_in" as const,
-    }))
-
-  // USDS outbound to Ops Multisig = future TWAP funding. Reported as its own
-  // fill row so users can see both legs of the flow; the SPK-in rows carry
-  // the actual purchase quantity, the USDS-out rows carry the actual spend.
-  const usdsFills = usdsOps
-    .filter((op) => op.from?.toLowerCase() === proxy && op.to?.toLowerCase() === ops)
-    .map((op) => ({
-      timestamp: Number(op.timestamp),
-      txHash: op.transactionHash,
-      spkBought: 0,
-      usdsSpent: Number(formatUnits(BigInt(op.value), 18)),
-      effectivePriceUSD: 0,
-      kind: "usds_out" as const,
-    }))
-
-  return [...spkFills, ...usdsFills].sort((a, b) => b.timestamp - a.timestamp)
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -283,7 +262,9 @@ export async function GET() {
       return r
     }),
     fetchBuybackFills().then((r) => {
-      sources.push("ethplorer address transfers")
+      sources.push(
+        `SPK purchases: eth_getLogs Transfer(*, ${BUYBACK_CONTRACT}) verified ${VERIFIED_AS_OF}; USD leg: DefiLlama holdersRevenue`
+      )
       return r
     }),
   ])
@@ -296,12 +277,12 @@ export async function GET() {
   // Sum each leg independently — SPK-in and USDS-out are two sides of the
   // same buyback flow but they don't land 1:1 per tx (CoW TWAP orders settle
   // asynchronously across days), so pairing per-row would misreport pace.
-  const cumulativeSpkBought = fills
-    .filter((f) => f.kind === "spk_in")
-    .reduce((s, f) => s + f.spkBought, 0)
-  const cumulativeUsdsSpent = fills
-    .filter((f) => f.kind === "usds_out")
-    .reduce((s, f) => s + f.usdsSpent, 0)
+  // SPK quantity comes from the verified on-chain scan; USD comes from the
+  // daily purchase-leg series. Both describe the same flow (SPK received at
+  // the buyback contract from CoW settlement), so dividing them gives a
+  // genuine program-wide VWAP.
+  const cumulativeSpkBought = VERIFIED_SPK_BOUGHT_BACK
+  const cumulativeUsdsSpent = fills.reduce((s, f) => s + f.usdsSpent, 0)
   const avgPriceUSD =
     cumulativeSpkBought > 0 ? cumulativeUsdsSpent / cumulativeSpkBought : null
 

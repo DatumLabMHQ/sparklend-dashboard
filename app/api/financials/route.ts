@@ -526,31 +526,34 @@ export async function GET() {
 
     // Fetch DefiLlama data + token info (the fast stuff)
     // sparklend = the lending pool itself (net interest income + flash + liq)
-    // spark-liquidity-layer = ALM Proxy deployments into Morpho/Aave/Ethena/Curve/etc
-    //   - dailyFees:   gross yield across ALL SLL strategy positions (correct)
-    //   - dailyRevenue: dailyFees minus Sky Base Rate applied to the whole
-    //     base — but only the residual ~$10M USDC/USDS float shows up in
-    //     DefiLlama's SLL TVL, so the Sky Base Rate subtraction is
-    //     over-scaled and pushes recent months negative. We use dailyFees
-    //     and apply Blockworks' effective spread ratio instead (see SLL
-    //     reconciliation notes below).
-    const [feesData, revenueData, supplySideData, sllFeesData, tokenInfo] =
+    // spark-liquidity-layer = the ALM Proxy's book.
+    //
+    // IMPORTANT: DefiLlama does NOT compute SLL revenue. Its adapter
+    // (dimension-adapters/fees/spark-liquidity-layer) is a passthrough of a
+    // Dune table published by Spark themselves:
+    //     dune.sparkdotfi.result_spark_sll_actual_revenue_daily
+    // with `fees` = gross_yield_usd and `revenue` = revenue_usd, and the
+    // adapter sets allowNegativeValue: true. So the negative months are
+    // Spark's own accounting, not an aggregator artifact: in months where
+    // the Sky Base Rate exceeds what the book earns, the SLL genuinely
+    // runs at a net loss.
+    //
+    // An earlier revision here replaced this first-party figure with
+    // dailyFees x 0.176, where 0.176 was fitted to a single Blockworks
+    // July 2026 datapoint. That degraded an authoritative number into a
+    // curve-fit and is reverted. Use Spark's published revenue.
+    //
+    // Blockworks models the same metric independently and disagrees
+    // materially (July 2026: Spark -$54K vs Blockworks $965K). That gap is
+    // surfaced in the UI rather than smoothed away.
+    const [feesData, revenueData, supplySideData, sllRevenueData, tokenInfo] =
       await Promise.all([
         fetchDefiLlamaFees("sparklend", "dailyFees"),
         fetchDefiLlamaFees("sparklend", "dailyRevenue"),
         fetchDefiLlamaFees("sparklend", "dailySupplySideRevenue"),
-        fetchDefiLlamaFees("spark-liquidity-layer", "dailyFees"),
+        fetchDefiLlamaFees("spark-liquidity-layer", "dailyRevenue"),
         getTokenInfo(),
       ])
-
-    // Blockworks-matching SLL revenue = dailyFees × spread ratio.
-    // Spread ratio is the fraction of gross SLL yield retained after Sky
-    // Base Rate + sUSDS DSR funding costs. Anchored to the Blockworks
-    // July 2026 datapoint (\$965K net / \$5.49M gross = 17.6%). Real ratio
-    // varies day-to-day with strategy mix, but a snapshot approximation
-    // gets us within methodology noise; per-strategy on-chain read for
-    // the exact spread is queued as a follow-up.
-    const SLL_SPREAD_RATIO = 0.176
 
     const priceMap = await getPriceMap(tokenInfo.addresses)
     const currentBlock = Number(await client.getBlockNumber())
@@ -585,11 +588,10 @@ export async function GET() {
     for (const [ts, val] of revenueData) revenueMap.set(ts, val)
     const supplyMap = new Map<number, number>()
     for (const [ts, val] of supplySideData) supplyMap.set(ts, val)
+    // Spark's own published SLL revenue, passed through unmodified.
+    // Negative days are real (Sky Base Rate exceeding book yield), not a bug.
     const sllMap = new Map<number, number>()
-    for (const [ts, val] of sllFeesData) {
-      // Convert gross → Blockworks-net using the spread ratio.
-      sllMap.set(ts, val * SLL_SPREAD_RATIO)
-    }
+    for (const [ts, val] of sllRevenueData) sllMap.set(ts, val)
 
     // ---- Estimate historical fee ratios ----
     // For days where we have on-chain data, compute the ratio of

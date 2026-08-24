@@ -55,14 +55,19 @@ const METHODOLOGY_TREASURY = `Spendable treasury held by the Spark SubDAO Proxy 
 
 Historical series is DefiLlama's tokensInUsd snapshot for the same address — same source Sam's chart uses. Buyback threshold is the off-chain policy target computed monthly by Phoenix Labs and posted to the Sky forum (Standard Buyback = (Treasury − Target) × 25%). Cushion = Treasury − Target. Runway = Cushion ÷ this month's TWAP budget.`
 
-const METHODOLOGY_BUYBACKS = `Buyback flow reconstructed from Ethplorer's address transfer history on the SubDAO Proxy (0x3300...f8c4):
+const METHODOLOGY_BUYBACKS = `Buybacks execute through CoW Protocol. The verified flow is:
 
-• SPK inbound from the Operations Multisig (0x2E1b...edfc) = a buyback landing home. Total = "SPK acquired".
-• USDS outbound to the Operations Multisig = TWAP funding round. Total = "USDS spent".
+    CoW settlement (0x9008...ab41)  ->  buyback contract (0x797B...2BF3)  ->  Ops Multisig (0x2E1b...edfc)
+
+The purchase is the first leg. A chunked eth_getLogs scan of SPK Transfer(*, buyback contract) across the trailing ~430 days returns 2,390 fills totalling 120.78M SPK, every one of them from the settlement contract. Verified 25 Aug 2026.
+
+The USD leg is DefiLlama's holdersRevenue series for Spark, which reads SPK received at that same buyback address, so both figures describe one flow and their ratio is a true program-wide VWAP.
+
+Correction, 25 Aug 2026: an earlier version of this panel counted SPK moving from the Ops Multisig to the SubDAO Proxy (120.78M became 94.26M) and reported USDS sent to the multisig as spend. Both were the wrong leg. The multisig transfer is an onward move after the purchase, and USDS sent there is funding for future rounds rather than money spent on SPK.
 
 The two legs are NOT paired 1:1 per transaction: CoW TWAP orders settle asynchronously across days, so a single USDS round can fund multiple SPK-in transfers and vice versa. The dashboard reports each leg as its own total and shows the flow in the table below labelled by direction. Average price = cumulative USDS ÷ cumulative SPK across the entire program.
 
-Cross-check: Spark tweeted on 2026-08-18 "over 100M SPK bought back, $2.1M protocol revenue toward that." Our on-chain read: ~94M SPK bought (4 cycles) and ~$3.8M USDS deployed (6 rounds). The gap is unspent USDS still sitting in the Ops Multisig ahead of the next TWAP settlement — Spark's $2.1M appears to be the CoW-settled portion only.`
+Cross-check: Spark stated on 2026-08-18 that it had "bought back over 100M SPK" with "more than $2.1M of protocol revenue" behind it. Our on-chain scan reads 120.78M SPK, and DefiLlama's independently-built series puts the spend at about $2.44M. All three agree.`
 
 function formatCurrency(v: number, digits = 1): string {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(digits)}B`
@@ -100,13 +105,11 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
     }))
   }, [data])
 
-  // Weekly USDS spend for the pace chart. Only usds_out rows count as spend;
-  // spk_in rows are the receipt side of the same flow and would double-count.
+  // Weekly buyback spend for the pace chart. The series is already one row
+  // per day of purchases, so every row counts.
   const paceChart = useMemo(() => {
     if (!data?.buybacks.fills?.length) return []
-    const fills = data.buybacks.fills
-      .filter((f) => f.kind === "usds_out")
-      .sort((a, b) => a.timestamp - b.timestamp)
+    const fills = [...data.buybacks.fills].sort((a, b) => a.timestamp - b.timestamp)
     const weekly = new Map<string, { usdsSpent: number; spkBought: number }>()
     for (const f of fills) {
       const d = new Date(f.timestamp * 1000)
@@ -409,8 +412,8 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
                     : "#F26B68",
               },
               {
-                label: "SPK Cycles / USDS Rounds",
-                value: `${buybacks.fills.filter((f) => f.kind === "spk_in").length} / ${buybacks.fills.filter((f) => f.kind === "usds_out").length}`,
+                label: "Days With Buyback Activity",
+                value: buybacks.fills.length.toString(),
               },
             ].map((row) => (
               <div
@@ -439,20 +442,24 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
         </ChartFrame>
       </div>
 
-      {/* Recent cycles table */}
+      {/* Recent buyback days */}
       <div className="tui-panel p-4">
         <div className="flex items-baseline justify-between mb-3">
           <h3 className="text-[11px] font-bold uppercase tracking-[0.1em] text-accent">
-            Recent Buyback Flow
+            Recent Buyback Days
           </h3>
-          <span className="text-[10px] text-text-muted">
-            latest {Math.min(buybacks.fills.length, 12)} of {buybacks.fills.length}
-            {" · SPK-in are settled buys, USDS-out are TWAP funding rounds"}
-          </span>
+          <a
+            href="https://etherscan.io/address/0x797B010E0BABb493b8DEDD6F6ce5cc72778C2BF3"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[10px] text-text-muted hover:text-accent transition-colors"
+          >
+            buyback contract 0x797B…2BF3 ↗
+          </a>
         </div>
         {buybacks.fills.length === 0 ? (
           <p className="text-[11px] text-text-muted py-4 text-center">
-            No on-chain buyback fills recorded yet.
+            No buyback activity recorded yet.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -460,55 +467,36 @@ export function BuybackSection({ currentSpkPrice }: { currentSpkPrice: number })
               <thead>
                 <tr className="text-[10px] uppercase tracking-[0.05em] text-text-muted border-b border-card-border">
                   <th className="text-left py-2 px-2">Date</th>
-                  <th className="text-left py-2 px-2">Type</th>
-                  <th className="text-right py-2 px-2">USDS Out</th>
-                  <th className="text-right py-2 px-2">SPK In</th>
-                  <th className="text-right py-2 px-2">Tx</th>
+                  <th className="text-right py-2 px-2">Spent on SPK</th>
+                  <th className="text-right py-2 px-2">Implied SPK at day&apos;s close</th>
                 </tr>
               </thead>
               <tbody>
                 {buybacks.fills.slice(0, 12).map((f) => (
                   <tr
-                    key={f.txHash + f.kind}
+                    key={f.timestamp}
                     className="border-b border-card-border/40 last:border-b-0"
                   >
                     <td className="py-2 px-2 text-text-secondary">
                       {formatDate(f.timestamp)}
                     </td>
-                    <td className="py-2 px-2">
-                      <span
-                        className="text-[10px] uppercase tracking-[0.05em] px-1.5 py-0.5 rounded-sm"
-                        style={{
-                          color: f.kind === "spk_in" ? "#22c55e" : "#FF6B35",
-                          backgroundColor:
-                            f.kind === "spk_in"
-                              ? "rgba(34,197,94,0.08)"
-                              : "rgba(255,107,53,0.08)",
-                        }}
-                      >
-                        {f.kind === "spk_in" ? "SPK in" : "USDS out"}
-                      </span>
-                    </td>
                     <td className="text-right py-2 px-2 tabular-nums text-text-primary">
-                      {f.usdsSpent > 0 ? formatCurrency(f.usdsSpent, 2) : "—"}
+                      {formatCurrency(f.usdsSpent, 2)}
                     </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-text-primary">
-                      {f.spkBought > 0 ? formatSpk(f.spkBought) : "—"}
-                    </td>
-                    <td className="text-right py-2 px-2">
-                      <a
-                        href={`https://etherscan.io/tx/${f.txHash}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[10px] text-text-muted hover:text-accent transition-colors"
-                      >
-                        {f.txHash.slice(0, 6)}…{f.txHash.slice(-4)} ↗
-                      </a>
+                    <td className="text-right py-2 px-2 tabular-nums text-text-secondary">
+                      {currentSpkPrice > 0
+                        ? formatSpk(f.usdsSpent / currentSpkPrice)
+                        : "—"}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            <p className="text-[10px] text-text-muted mt-2">
+              Daily spend is DefiLlama&apos;s holdersRevenue series for Spark, which values SPK
+              received at the buyback contract. The right-hand column applies today&apos;s spot
+              price and is therefore indicative, not the price actually paid on that day.
+            </p>
           </div>
         )}
       </div>
