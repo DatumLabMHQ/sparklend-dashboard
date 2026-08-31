@@ -19,8 +19,6 @@ import {
 import { formatUSD } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
 import { useThemeColors } from "@/components/theme-provider"
-import { aggregateData } from "@/components/financials/aggregate"
-import { PeriodToggle, type Period } from "@/components/financials/period-toggle"
 
 interface EcosystemData {
   daily: Array<{ date: number; savings: number; sparklend: number; sll: number; total: number }>
@@ -29,7 +27,8 @@ interface EcosystemData {
 }
 
 interface FinancialsData {
-  daily: Array<{ date: number; sllRevenue: number }>
+  monthly: Array<{ month: string; sllGross: number; sllNet: number; sllCost: number }>
+  latest?: { month: string; sllNet: number }
 }
 
 const Q2_SLL_ANCHOR = 2_600_000_000 // $2.6B — Q2 report close
@@ -53,19 +52,23 @@ export default function LiquidityLayerPage() {
   const { data: eco, loading: ecoLoading } = useCachedFetch<EcosystemData>("/api/ecosystem", { ttl: 15 * 60_000 })
   const { data: fin } = useCachedFetch<FinancialsData>("/api/financials", { ttl: 10 * 60_000 })
   const { data: venues } = useCachedFetch<any>("/api/sll-venues", { ttl: 30 * 60_000 })
-  const [period, setPeriod] = useState<Period>("W")
 
   const sllSeries = useMemo(
     () => eco?.daily.map((d) => ({ date: d.date, sll: d.sll })) || [],
     [eco]
   )
 
+  // Monthly, from Spark's own books. The DefiLlama daily series this chart used
+  // to read captures roughly two thirds of Spark's gross yield from May 2026 on
+  // and prints losses in months Spark reports a profit.
   const revenueData = useMemo(() => {
-    if (!fin?.daily) return []
-    // Only include days SLL has data (post-Apr 2025)
-    const withSll = fin.daily.filter((d) => d.sllRevenue !== undefined && d.sllRevenue !== 0)
-    return aggregateData(withSll as any, period, ["sllRevenue"])
-  }, [fin, period])
+    if (!fin?.monthly) return []
+    const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    return fin.monthly.map((m) => {
+      const [y, mm] = m.month.split("-")
+      return { label: `${names[Number(mm) - 1]} '${y.slice(2)}`, sllRevenue: m.sllNet }
+    })
+  }, [fin])
 
   const change30d = useMemo(() => {
     if (!eco?.daily) return null
@@ -82,12 +85,7 @@ export default function LiquidityLayerPage() {
     return { delta, pct }
   }, [eco])
 
-  const revenue30d = useMemo(() => {
-    if (!fin?.daily) return 0
-    const now = Math.floor(Date.now() / 1000)
-    const cutoff = now - 30 * 86400
-    return fin.daily.filter((d) => d.date >= cutoff).reduce((s, d) => s + (d.sllRevenue || 0), 0)
-  }, [fin])
+  const latestMonth = useMemo(() => fin?.monthly?.at(-1) ?? null, [fin])
 
   if (ecoLoading || !eco || !eco.sllByChain) return <LoadingSkeleton />
 
@@ -117,10 +115,14 @@ export default function LiquidityLayerPage() {
             color: "#5B7FFF",
           },
           {
-            label: "30d Revenue",
-            value: formatUSD(revenue30d),
-            sub: revenue30d < 0 ? "Funding cost > yield" : "Net of Sky funding cost",
-            color: revenue30d < 0 ? "#F26B68" : "#22c55e",
+            label: "Latest month net",
+            value: latestMonth ? formatUSD(latestMonth.sllNet) : "—",
+            sub: latestMonth
+              ? latestMonth.sllNet < 0
+                ? "Funding cost exceeded yield"
+                : `on ${formatUSD(latestMonth.sllGross)} of gross yield`
+              : "",
+            color: latestMonth && latestMonth.sllNet < 0 ? "#F26B68" : "#22c55e",
           },
         ].map((card) => (
           <div key={card.label} className="tui-card bg-card-bg border border-card-border rounded p-4 relative overflow-hidden">
@@ -137,7 +139,7 @@ export default function LiquidityLayerPage() {
       {/* Hero: SLL TVL over time with Q2 anchor */}
       <ChartFrame
         title="Spark Liquidity Layer TVL"
-        subtitle="ALM Proxy deployments across Morpho, Aave, Ethena, Curve, PSM and other venues, all chains"
+        subtitle="Total Liquidity Layer assets, all chains"
         units="USD"
         source="DefiLlama /protocol/spark-liquidity-layer"
         methodology={
@@ -153,7 +155,11 @@ export default function LiquidityLayerPage() {
             {vsQ2 && (
               <> — {vsQ2.delta >= 0 ? "up" : "down"} <strong>{Math.abs(vsQ2.pct).toFixed(1)}%</strong> from Q2 close.</>
             )}
-            {vsQ2 && vsQ2.delta < 0 && " SLL has been shrinking as Sky redirects capital and stables demand across DeFi has softened."}
+            {vsQ2 && vsQ2.delta < 0 && " SLL has been shrinking as Sky redirects capital and stables demand across DeFi has softened."}{" "}
+            This series is DefiLlama&apos;s TVL. Spark&apos;s own dashboard reports a larger
+            figure for allocated assets, and larger again for total assets, because the three
+            count different things. The venue breakdown below uses Spark&apos;s allocation
+            table, so its total will not match this line.
           </span>
         }
       >
@@ -241,23 +247,29 @@ export default function LiquidityLayerPage() {
 
         <ChartFrame
           title="SLL Revenue"
-          subtitle="Net yield from ALM Proxy deployments, after Sky funding cost"
+          subtitle="Monthly net yield from Liquidity Layer deployments, after Sky funding cost"
           units="USD"
-          source="DefiLlama /summary/fees/spark-liquidity-layer dailyRevenue"
-          actions={<PeriodToggle selected={period} onChange={setPeriod} />}
+          source="data.spark.finance (Block Analitica)"
           methodology={
             <>
-              DefiLlama&apos;s dailyRevenue line for spark-liquidity-layer is net of what Sky charges for funding
-              (SSR × outstanding USDS). Days when funding cost exceeds venue yield print negative. That&apos;s an
-              honest signal — SLL is not always a positive contributor to Spark&apos;s revenue stack.
+              Spark&apos;s own monthly accounting: gross yield on deployed capital less what Sky
+              charges to fund it. Negative months are real and mean the funding cost exceeded
+              what the book earned. Net is a small residual between two much larger numbers, so
+              it swings hard on modest changes to either. Not sourced from DefiLlama, whose
+              series for this product captures roughly two thirds of Spark&apos;s reported gross
+              yield from May 2026 onward.
             </>
           }
           height={280}
           footnote={
-            <span>
-              Trailing 30-day: <strong>{formatUSD(revenue30d)}</strong>
-              {revenue30d < 0 && " — negative days outweighed positive ones. Fund yields are compressing while Sky's funding rate stays fixed."}
-            </span>
+            latestMonth ? (
+              <span>
+                Latest month: <strong>{formatUSD(latestMonth.sllNet)}</strong> net on{" "}
+                <strong>{formatUSD(latestMonth.sllGross)}</strong> of gross yield, a{" "}
+                <strong>{((latestMonth.sllNet / latestMonth.sllGross) * 100).toFixed(1)}%</strong>{" "}
+                take rate. The current month is still accruing.
+              </span>
+            ) : undefined
           }
         >
           <div style={{ height: 240 }} className="w-full">

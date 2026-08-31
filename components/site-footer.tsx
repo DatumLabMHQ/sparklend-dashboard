@@ -13,10 +13,14 @@ export function SiteFooter() {
           <span className="font-semibold" style={{ color: "var(--text-secondary)" }}>
             Sources:
           </span>{" "}
-          Protocol TVL, per-chain splits, fees, and revenue from DefiLlama (public API).
-          On-chain reads (flashloan events, liquidation events, Sky Distribution Reward mints,
-          user positions) via public RPCs (mevblocker, publicnode, ankr, llamarpc).
-          Figures refresh on load; on-chain scans cache for ~30 min and are seeded with a build-time baseline.
+          Protocol TVL and per-chain splits from DefiLlama (public API). Financials, including
+          all fee, revenue, spread and buyback figures, come first-party from Spark&apos;s own
+          data hub at data.spark.finance (Block Analitica). DefiLlama&apos;s Spark Liquidity
+          Layer fee series is not used: it captures roughly two thirds of Spark&apos;s reported
+          gross yield from May 2026 onward and reports losses where Spark&apos;s own books show
+          a profit. On-chain reads (liquidations, user positions) via public RPCs (mevblocker,
+          publicnode, ankr, llamarpc). Figures refresh on load; on-chain scans cache for ~30 min
+          and are seeded with a build-time baseline.
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <a

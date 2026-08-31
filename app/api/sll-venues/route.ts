@@ -1,150 +1,149 @@
 import { NextResponse } from "next/server"
 
 /**
- * SLL deployment breakdown by venue. Fetches DefiLlama's spark-liquidity-layer
- * per-token USD balances on Ethereum and categorises each token into a venue
- * category (Direct stablecoins, Spark Vault V2, Morpho, Aave V3, Yield tokens).
+ * Spark Liquidity Layer composition, first-party.
  *
- * Key finding vs Q2 2026 report: the report described SLL as deploying into
- * Morpho vaults, Aave V3, and Ethena sUSDe. Live shows the majority of the
- * balance sheet has migrated into Spark's OWN Vault V2 products (spDAI,
- * spUSDS, spUSDT, spPYUSD) — a real narrative shift worth surfacing.
+ * PREVIOUS SOURCE WAS WRONG. This route used to read DefiLlama's
+ * `/protocol/spark-liquidity-layer` per-token `tokensInUsd` map. That endpoint
+ * only sees ERC-20 balances, so it missed whole positions: RLUSD ($251.7M),
+ * Anchorage ($210.0M) and Uniswap V4 LP ($150.1M) were absent, and Morpho read
+ * $22.4M against an actual $289.1M. An analysis built on it concluded SparkLend
+ * was 62.8% of the book with "under 1% external", when Spark publishes 47.6%
+ * and roughly half external.
+ *
+ * Spark's own allocation table at data.spark.finance (Block Analitica) is the
+ * authority and is key-free. Verified 2026-08-31: this route reproduces the
+ * published dashboard to within 0.01pp.
  */
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 30
 
-// Token symbol → { category, human-readable label }.
-// Symbols are what DefiLlama reports; we map them to the venue they represent.
-const TOKEN_CATEGORIES: Record<string, { category: string; label: string }> = {
-  // Direct stablecoin holdings — idle capital waiting to be deployed
-  USDS: { category: "Direct stablecoins", label: "USDS (idle)" },
-  USDC: { category: "Direct stablecoins", label: "USDC (idle)" },
-  USDT: { category: "Direct stablecoins", label: "USDT (idle)" },
-  PYUSD: { category: "Direct stablecoins", label: "PYUSD (idle)" },
-  DAI: { category: "Direct stablecoins", label: "DAI (idle)" },
-  SUSDS: { category: "Direct stablecoins", label: "sUSDS (savings)" },
-  // Spark Vault V2 — Spark's own vault product; SLL deposits into these
-  SPUSDS: { category: "Spark Vault V2", label: "spUSDS vault" },
-  SPUSDT: { category: "Spark Vault V2", label: "spUSDT vault" },
-  SPDAI: { category: "Spark Vault V2", label: "spDAI vault" },
-  SPPYUSD: { category: "Spark Vault V2", label: "spPYUSD vault" },
-  SPUSDC: { category: "Spark Vault V2", label: "spUSDC vault" },
-  SPETH: { category: "Spark Vault V2", label: "spETH vault" },
-  // Morpho Blue vaults curated for Spark (Base Chain variants)
-  SPARKUSDCBC: { category: "Morpho Blue", label: "Morpho USDC (Base variant)" },
-  SPARKUSDTBC: { category: "Morpho Blue", label: "Morpho USDT (Base variant)" },
-  SPARKUSDS: { category: "Morpho Blue", label: "Morpho USDS" },
-  // Aave V3 positions (aTokens on Ethereum)
-  AETHUSDT: { category: "Aave V3", label: "Aave V3 USDT" },
-  AETHUSDC: { category: "Aave V3", label: "Aave V3 USDC" },
-  AETHUSDS: { category: "Aave V3", label: "Aave V3 USDS" },
-  AETHLIDOUSDS: { category: "Aave V3", label: "Aave Prime USDS" },
-  // Yield / RWA-adjacent tokens Spark holds
-  SUSDE: { category: "Yield tokens", label: "Ethena sUSDe" },
-  USDE: { category: "Yield tokens", label: "Ethena USDe" },
-  SYRUPUSDC: { category: "Yield tokens", label: "Maple syrupUSDC" },
-  USTB: { category: "Yield tokens", label: "Superstate USTB (RWA)" },
-}
-
-// Category → colour (Spark-orange for the "own vault" category to signal it's Spark's product).
-const CATEGORY_COLORS: Record<string, string> = {
-  "Spark Vault V2": "#FF6B35",
-  "Morpho Blue": "#5B7FFF",
-  "Aave V3": "#B4C5EA",
-  "Yield tokens": "#A78BFA",
-  "Direct stablecoins": "#22c55e",
-  Other: "#6B7280",
-}
-
+const STAR = "https://spark2-api.blockanalitica.com"
+const TTL = 30 * 60_000
 let cache: any = null
 let cacheTime = 0
-const TTL = 30 * 60_000
+
+/**
+ * Block Analitica's `protocol` field mapped to a display label, and whether the
+ * venue is Spark's own product or somebody else's. `arkis` is what the API calls
+ * the position Spark's own UI labels "Spark Prime".
+ */
+const VENUES: Record<string, { label: string; own: boolean; color: string }> = {
+  sparklend: { label: "SparkLend", own: true, color: "#F5A623" },
+  PSM3: { label: "PSM3", own: true, color: "#22D3EE" },
+  arkis: { label: "Spark Prime", own: true, color: "#E879F9" },
+  morpho: { label: "Morpho", own: false, color: "#3B82F6" },
+  ripple: { label: "Ripple RLUSD", own: false, color: "#94A3B8" },
+  paypal: { label: "PayPal PYUSD", own: false, color: "#1E40AF" },
+  anchorage: { label: "Anchorage", own: false, color: "#CBD5E1" },
+  uniswap: { label: "Uniswap V4", own: false, color: "#EC4899" },
+  aave: { label: "Aave V3", own: false, color: "#8B5CF6" },
+  curve: { label: "Curve", own: false, color: "#10B981" },
+  fluid: { label: "Fluid", own: false, color: "#06B6D4" },
+  maple: { label: "Maple", own: false, color: "#F97316" },
+  ethena: { label: "Ethena", own: false, color: "#A3A3A3" },
+  idle: { label: "Idle", own: true, color: "#6B7280" },
+}
+
+const venue = (p: string) =>
+  VENUES[p] ?? { label: p, own: false, color: "#6B7280" }
 
 export async function GET() {
-  if (cache && Date.now() - cacheTime < TTL) {
-    return NextResponse.json(cache)
-  }
+  if (cache && Date.now() - cacheTime < TTL) return NextResponse.json(cache)
 
   try {
-    const r = await fetch("https://api.llama.fi/protocol/spark-liquidity-layer", {
-      cache: "no-store",
-    })
-    if (!r.ok) throw new Error(`defillama ${r.status}`)
-    const j = await r.json()
+    const [aum, summary] = await Promise.all([
+      fetch(`${STAR}/sparkstar/sll/aum/`, { cache: "no-store" }).then((r) => {
+        if (!r.ok) throw new Error(`aum ${r.status}`)
+        return r.json()
+      }),
+      fetch(`${STAR}/sparkstar/sll/`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ])
 
-    const eth = j.chainTvls?.Ethereum
-    const latest = eth?.tokensInUsd?.at(-1)
-    if (!latest?.tokens) throw new Error("no token data")
+    const rows: Array<{ network: string; protocol: string; asset_symbol: string; aum_usd: string }> =
+      Array.isArray(aum) ? aum : []
 
-    interface TokenEntry {
-      symbol: string
-      label: string
-      category: string
-      usd: number
-    }
-
-    const entries: TokenEntry[] = []
     let totalUsd = 0
-    for (const [rawSymbol, rawValue] of Object.entries(latest.tokens)) {
-      const usd = rawValue as number
-      if (!Number.isFinite(usd) || usd < 100) continue // filter dust
-      const symbol = rawSymbol.toUpperCase()
-      const meta = TOKEN_CATEGORIES[symbol] || { category: "Other", label: symbol }
-      entries.push({ symbol, label: meta.label, category: meta.category, usd })
-      totalUsd += usd
-    }
+    for (const r of rows) totalUsd += Number(r.aum_usd || 0)
 
-    entries.sort((a, b) => b.usd - a.usd)
-
-    // Roll up by category
-    const byCategory: Record<string, { category: string; usd: number; share: number; color: string }> = {}
-    for (const e of entries) {
-      if (!byCategory[e.category]) {
-        byCategory[e.category] = {
-          category: e.category,
-          usd: 0,
-          share: 0,
-          color: CATEGORY_COLORS[e.category] || "#6B7280",
+    // Per-position rows, one per network + protocol + asset.
+    const positions = rows
+      .map((r) => {
+        const v = venue(r.protocol)
+        const usd = Number(r.aum_usd || 0)
+        // Avoid "Anchorage on Anchorage" / "RLUSD on Ripple RLUSD", and keep the
+        // four separate PSM3 rows distinguishable by naming their network.
+        const sym = String(r.asset_symbol || "")
+        const inLabel = v.label.toUpperCase().includes(sym.toUpperCase())
+        const net = r.network && r.network !== "ethereum" ? ` (${r.network})` : ""
+        return {
+          label: inLabel ? `${v.label}${net}` : `${sym} on ${v.label}${net}`,
+          symbol: r.asset_symbol,
+          network: r.network,
+          category: v.label,
+          own: v.own,
+          usd,
+          share: totalUsd > 0 ? (usd / totalUsd) * 100 : 0,
+          color: v.color,
         }
+      })
+      .filter((p) => p.usd > 0)
+      .sort((a, b) => b.usd - a.usd)
+
+    const byCategory: Record<string, { category: string; own: boolean; usd: number; share: number; color: string }> = {}
+    for (const p of positions) {
+      byCategory[p.category] ??= {
+        category: p.category,
+        own: p.own,
+        usd: 0,
+        share: 0,
+        color: p.color,
       }
-      byCategory[e.category].usd += e.usd
+      byCategory[p.category].usd += p.usd
     }
     for (const c of Object.values(byCategory)) {
       c.share = totalUsd > 0 ? (c.usd / totalUsd) * 100 : 0
     }
     const categories = Object.values(byCategory).sort((a, b) => b.usd - a.usd)
 
-    // Enrich per-token entries with share
-    const positions = entries.map((e) => ({
-      ...e,
-      share: totalUsd > 0 ? (e.usd / totalUsd) * 100 : 0,
-      color: CATEGORY_COLORS[e.category] || "#6B7280",
-    }))
+    const ownShare = categories.filter((c) => c.own).reduce((s, c) => s + c.share, 0)
+    const externalShare = categories.filter((c) => !c.own).reduce((s, c) => s + c.share, 0)
+    const sparkLendShare = categories.find((c) => c.category === "SparkLend")?.share ?? 0
+
+    const byNetwork: Record<string, number> = {}
+    for (const p of positions) byNetwork[p.network] = (byNetwork[p.network] || 0) + p.usd
 
     const result = {
       totalUsd,
-      asOf: latest.date,
+      asOf: summary?.date ?? new Date().toISOString().slice(0, 10),
       categories,
       positions,
+      ownShare,
+      externalShare,
+      sparkLendShare,
+      networks: Object.entries(byNetwork)
+        .map(([network, usd]) => ({ network, usd, share: totalUsd > 0 ? (usd / totalUsd) * 100 : 0 }))
+        .sort((a, b) => b.usd - a.usd),
       meta: {
-        source: "DefiLlama /protocol/spark-liquidity-layer Ethereum tokensInUsd",
+        source: `${STAR}/sparkstar/sll/aum/`,
         note:
-          "Q2 2026 report described SLL as deploying into Morpho vaults, Aave V3, and Ethena sUSDe. Live composition shows a shift toward Spark's own Vault V2 products (spUSDS/spDAI/spUSDT/spPYUSD) — Spark now largely self-curates its capital rather than outsourcing to external venues.",
+          "Spark's own allocation table. SparkLend is the single largest destination for the Liquidity Layer's capital, so roughly half of what Sky lends Spark is redeployed into Spark's own lending market rather than into external venues. The remainder sits with Morpho, Ripple, PayPal, Anchorage and Uniswap.",
       },
     }
 
     cache = result
     cacheTime = Date.now()
-
     const res = NextResponse.json(result)
-    res.headers.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=3600")
+    res.headers.set("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600")
     return res
   } catch (err: any) {
-    console.error("SLL venues API error:", err.message?.slice(0, 100))
+    console.error("SLL venues API error:", err.message?.slice(0, 120))
     if (cache) return NextResponse.json(cache)
     return NextResponse.json(
-      { error: "Failed to fetch SLL venue data", details: err.message },
+      { error: "Failed to fetch SLL composition", details: err.message },
       { status: 500 }
     )
   }

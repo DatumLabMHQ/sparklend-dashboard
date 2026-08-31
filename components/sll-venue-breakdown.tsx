@@ -13,10 +13,11 @@ const METHODOLOGY = `SLL's balance sheet broken down by venue category. Each tok
 • Yield tokens — Ethena sUSDe/USDe, Maple syrupUSDC, Superstate USTB (RWA)
 • Direct stablecoins — idle USDS, USDC, USDT, DAI, PYUSD, sUSDS sitting in the ALM Proxy awaiting deployment
 
-Q2 2026 report described SLL as deploying into Morpho, Aave, and Ethena. Live shows most of the balance sheet has moved into Spark's own Vault V2 products — Spark now largely self-curates rather than outsourcing yield.`
+Source is Spark's own allocation table at data.spark.finance, not an aggregator's token balances. An earlier version of this panel read DefiLlama's per-token map, which sees only ERC-20 balances and therefore missed the RLUSD, Anchorage and Uniswap V4 positions entirely and understated Morpho by more than tenfold.`
 
 interface Category {
   category: string
+  own: boolean
   usd: number
   share: number
   color: string
@@ -24,6 +25,7 @@ interface Category {
 
 interface Position {
   symbol: string
+  network?: string
   label: string
   category: string
   usd: number
@@ -33,20 +35,24 @@ interface Position {
 
 interface SllVenueData {
   totalUsd: number
-  asOf: number
+  asOf: string
   categories: Category[]
   positions: Position[]
+  ownShare: number
+  externalShare: number
+  sparkLendShare: number
+  networks?: Array<{ network: string; usd: number; share: number }>
   meta: { source: string; note: string }
 }
 
 export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
   const { categories, positions, totalUsd, meta } = data
 
-  const sparkVaultShare = categories.find((c) => c.category === "Spark Vault V2")?.share ?? 0
-  const externalShare = categories
-    .filter((c) => ["Morpho Blue", "Aave V3", "Yield tokens"].includes(c.category))
-    .reduce((s, c) => s + c.share, 0)
-  const idleShare = categories.find((c) => c.category === "Direct stablecoins")?.share ?? 0
+  // Own vs external is computed server-side from Spark's own venue labels, so
+  // the split does not silently break when a new venue appears.
+  const sparkLendShare = data.sparkLendShare ?? 0
+  const ownShare = data.ownShare ?? 0
+  const externalShare = data.externalShare ?? 0
 
   const donutData = useMemo(
     () => categories.map((c) => ({ name: c.category, value: c.usd, color: c.color })),
@@ -56,19 +62,20 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
   return (
     <ChartFrame
       title="SLL Deployment by Venue"
-      subtitle={`Where SLL's $${(totalUsd / 1e9).toFixed(2)}B is currently parked on Ethereum`}
+      subtitle={`Where the Liquidity Layer's $${(totalUsd / 1e9).toFixed(2)}B is allocated, all networks`}
       units="USD"
       source={meta.source}
       methodology={METHODOLOGY}
       height={420}
       footnote={
         <span>
-          Q2 2026 report framing: SLL routes into Morpho, Aave, Ethena.
-          Live: <strong>Spark Vault V2 {sparkVaultShare.toFixed(1)}%</strong> ·
-          external yield venues (Morpho + Aave + Ethena/Maple) {externalShare.toFixed(1)}% ·
-          idle stablecoins {idleShare.toFixed(1)}%.
-          Spark has quietly insourced most of SLL — worth a thread on how the "capital allocator"
-          increasingly allocates to itself.
+          <strong>SparkLend alone takes {sparkLendShare.toFixed(1)}%</strong> of the Liquidity
+          Layer, the single largest destination. Counting PSM3 and Spark Prime,{" "}
+          <strong>{ownShare.toFixed(1)}%</strong> is redeployed into Spark&apos;s own products
+          against <strong>{externalShare.toFixed(1)}%</strong> in external venues. So roughly
+          half of what Sky lends Spark comes back into Spark&apos;s own lending market. The Q2
+          2026 report framed the Liquidity Layer as routing into Morpho, Aave and Ethena; Aave,
+          Curve, Ethena, Fluid and Maple together now hold under $200K of a $2.2B book.
         </span>
       }
     >
@@ -142,8 +149,8 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
               </tr>
             </thead>
             <tbody>
-              {positions.map((p) => (
-                <tr key={p.symbol}>
+              {positions.map((p, i) => (
+                <tr key={`${p.category}-${p.symbol}-${p.network ?? ""}-${i}`}>
                   <td>
                     <div className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-sm" style={{ backgroundColor: p.color }} />
