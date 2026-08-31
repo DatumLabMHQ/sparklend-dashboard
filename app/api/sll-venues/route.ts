@@ -53,12 +53,17 @@ export async function GET() {
   if (cache && Date.now() - cacheTime < TTL) return NextResponse.json(cache)
 
   try {
-    const [aum, summary] = await Promise.all([
+    const [aum, summary, hist] = await Promise.all([
       fetch(`${STAR}/sparkstar/sll/aum/`, { cache: "no-store" }).then((r) => {
         if (!r.ok) throw new Error(`aum ${r.status}`)
         return r.json()
       }),
       fetch(`${STAR}/sparkstar/sll/`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      // days_ago=9999 returns the full history back to 2023-05-08. Values between
+      // 366 and 9998 return a single empty row, so do not "tidy" this number.
+      fetch(`${STAR}/sparkstar/sll/aum/historic/?days_ago=9999`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
     ])
@@ -116,8 +121,52 @@ export async function GET() {
     const byNetwork: Record<string, number> = {}
     for (const p of positions) byNetwork[p.network] = (byNetwork[p.network] || 0) + p.usd
 
+    // Per-network history, same source as everything else on the page, so the
+    // headline card and the chart cannot disagree. Rows are one per calendar
+    // date with a column per network, matching ByChainAreaChart's contract.
+    const byDate = new Map<string, Record<string, number>>()
+    const netMax: Record<string, number> = {}
+    for (const r of Array.isArray(hist) ? hist : []) {
+      const d = String(r.date)
+      const net = String(r.network || "unknown")
+      const usd = Number(r.aum_usd || 0)
+      if (!byDate.has(d)) byDate.set(d, {})
+      const row = byDate.get(d)!
+      row[net] = (row[net] || 0) + usd
+      if (row[net] > (netMax[net] || 0)) netMax[net] = row[net]
+    }
+    // Drop networks that never held anything worth plotting.
+    const histChains = Object.entries(netMax)
+      .filter(([, v]) => v > 100_000)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k]) => k)
+
+    const histDaily = [...byDate.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([d, row]) => {
+        const out: Record<string, number> = {
+          date: Math.floor(new Date(`${d}T00:00:00Z`).getTime() / 1000),
+        }
+        let t = 0
+        for (const c of histChains) {
+          out[c] = row[c] || 0
+          t += out[c]
+        }
+        out.total = t
+        return out
+      })
+
+    const last = histDaily[histDaily.length - 1]
+    const prior30 = histDaily[histDaily.length - 31]
+    const change30d =
+      last && prior30 && prior30.total > 0
+        ? { delta: last.total - prior30.total, pct: ((last.total - prior30.total) / prior30.total) * 100 }
+        : null
+
     const result = {
       totalUsd,
+      history: { chains: histChains, daily: histDaily },
+      change30d,
       asOf: summary?.date ?? new Date().toISOString().slice(0, 10),
       categories,
       positions,

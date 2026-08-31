@@ -31,6 +31,19 @@ interface FinancialsData {
   latest?: { month: string; sllNet: number }
 }
 
+interface VenueData {
+  asOf: string
+  totalUsd: number
+  history: { chains: string[]; daily: Array<Record<string, number>> }
+  change30d: { delta: number; pct: number } | null
+  categories: any[]
+  positions: any[]
+  ownShare: number
+  externalShare: number
+  sparkLendShare: number
+  meta: { source: string; note: string }
+}
+
 const Q2_SLL_ANCHOR = 2_600_000_000 // $2.6B — Q2 report close
 
 function LoadingSkeleton() {
@@ -51,11 +64,11 @@ export default function LiquidityLayerPage() {
   const colors = useThemeColors()
   const { data: eco, loading: ecoLoading } = useCachedFetch<EcosystemData>("/api/ecosystem", { ttl: 15 * 60_000 })
   const { data: fin } = useCachedFetch<FinancialsData>("/api/financials", { ttl: 10 * 60_000 })
-  const { data: venues } = useCachedFetch<any>("/api/sll-venues", { ttl: 30 * 60_000 })
+  const { data: venues } = useCachedFetch<VenueData>("/api/sll-venues", { ttl: 30 * 60_000 })
 
   const sllSeries = useMemo(
-    () => eco?.daily.map((d) => ({ date: d.date, sll: d.sll })) || [],
-    [eco]
+    () => venues?.history?.daily.map((d) => ({ date: d.date, sll: d.total })) || [],
+    [venues]
   )
 
   // Monthly, from Spark's own books. The DefiLlama daily series this chart used
@@ -70,26 +83,19 @@ export default function LiquidityLayerPage() {
     })
   }, [fin])
 
-  const change30d = useMemo(() => {
-    if (!eco?.daily) return null
-    const now = eco.daily.at(-1)?.sll || 0
-    const then = eco.daily.at(-31)?.sll || 0
-    if (then === 0) return null
-    return { delta: now - then, pct: ((now - then) / then) * 100 }
-  }, [eco])
+  const change30d = venues?.change30d ?? null
 
   const vsQ2 = useMemo(() => {
-    if (!eco) return null
-    const delta = eco.current.sll - Q2_SLL_ANCHOR
-    const pct = (delta / Q2_SLL_ANCHOR) * 100
-    return { delta, pct }
-  }, [eco])
+    if (!venues?.totalUsd) return null
+    const delta = venues.totalUsd - Q2_SLL_ANCHOR
+    return { delta, pct: (delta / Q2_SLL_ANCHOR) * 100 }
+  }, [venues])
 
   const latestMonth = useMemo(() => fin?.monthly?.at(-1) ?? null, [fin])
 
-  if (ecoLoading || !eco || !eco.sllByChain) return <LoadingSkeleton />
+  if (ecoLoading || !eco || !venues?.history) return <LoadingSkeleton />
 
-  const currentSll = eco.current.sll
+  const currentSll = venues.totalUsd
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
@@ -141,7 +147,7 @@ export default function LiquidityLayerPage() {
         title="Spark Liquidity Layer TVL"
         subtitle="Total Liquidity Layer assets, all chains"
         units="USD"
-        source="DefiLlama /protocol/spark-liquidity-layer"
+        source="data.spark.finance (Block Analitica)"
         methodology={
           <>
             SLL deploys idle USDS/DAI from Sky&apos;s balance sheet into external yield venues (Morpho vaults, Aave V3, Ethena sUSDe, PSM, Curve pools).
@@ -156,10 +162,10 @@ export default function LiquidityLayerPage() {
               <> — {vsQ2.delta >= 0 ? "up" : "down"} <strong>{Math.abs(vsQ2.pct).toFixed(1)}%</strong> from Q2 close.</>
             )}
             {vsQ2 && vsQ2.delta < 0 && " SLL has been shrinking as Sky redirects capital and stables demand across DeFi has softened."}{" "}
-            This series is DefiLlama&apos;s TVL. Spark&apos;s own dashboard reports a larger
-            figure for allocated assets, and larger again for total assets, because the three
-            count different things. The venue breakdown below uses Spark&apos;s allocation
-            table, so its total will not match this line.
+            Every figure on this page is Spark&apos;s own <strong>allocated assets</strong>,
+            from the same allocation table as the venue breakdown below. Spark also publishes a
+            larger <em>total assets</em> number, and DefiLlama publishes a smaller TVL; the three
+            count different things, so do not compare them across sites.
           </span>
         }
       >
@@ -225,10 +231,10 @@ export default function LiquidityLayerPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ByChainAreaChart
           title="SLL TVL by Chain"
-          subtitle="Chain distribution of ALM Proxy deployments"
-          chains={eco.sllByChain.chains}
-          daily={eco.sllByChain.daily}
-          source="DefiLlama per-chain series"
+          subtitle="Chain distribution of allocated assets, averaged over each period"
+          chains={venues.history.chains}
+          daily={venues.history.daily}
+          source="data.spark.finance (Block Analitica)"
           methodology={
             <>
               SLL has been deployed on Ethereum + 7 L2s over 2026 as Sky expanded routes. Ethereum still holds
@@ -238,8 +244,11 @@ export default function LiquidityLayerPage() {
           }
           footnote={
             <span>
-              Ethereum ~99% of SLL. Watching non-Ethereum share tick up would be a signal Sky is diversifying
-              deployment across chains.
+              Values are <strong>averages across each period</strong>, not month-end levels, so
+              the latest bucket reads below the headline card while a month is still running.
+              Ethereum holds the large majority of the Liquidity Layer, with Base the only other
+              meaningful chain. Watching the non-Ethereum share tick up would be a signal Sky is
+              diversifying deployment.
             </span>
           }
           height={280}
