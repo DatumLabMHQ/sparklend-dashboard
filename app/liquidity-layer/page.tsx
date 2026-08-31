@@ -212,7 +212,7 @@ export default function LiquidityLayerPage() {
                 }}
                 cursor={{ stroke: colors.textMuted, strokeWidth: 1, strokeDasharray: "4 4" }}
               />
-              <Area type="monotone" dataKey="sll" stroke="#FF6B35" strokeWidth={1.5} fill="url(#sllHero)" />
+              <Area type="monotone" dataKey="sll" stroke="#FF6B35" strokeWidth={1.5} fill="url(#sllHero)" isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -306,7 +306,7 @@ export default function LiquidityLayerPage() {
                   }}
                   cursor={{ fill: "rgba(255,255,255,0.03)" }}
                 />
-                <Bar dataKey="sllRevenue" radius={[2, 2, 0, 0]}>
+                <Bar dataKey="sllRevenue" radius={[2, 2, 0, 0]} isAnimationActive={false}>
                   {revenueData.map((d: any, i: number) => (
                     <Cell key={i} fill={d.sllRevenue >= 0 ? "#22c55e" : "#F26B68"} />
                   ))}

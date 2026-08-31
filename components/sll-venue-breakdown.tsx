@@ -54,9 +54,29 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
   const ownShare = data.ownShare ?? 0
   const externalShare = data.externalShare ?? 0
 
+  // Fourteen venues, five of them holding under $200K between them, left the
+  // legend taller than the chart. Fold anything under 0.5% into one row; the
+  // position table beside it still lists every line in full.
+  const shown = useMemo(() => {
+    const big = categories.filter((c) => c.share >= 0.5)
+    const dust = categories.filter((c) => c.share < 0.5)
+    if (!dust.length) return big
+    const usd = dust.reduce((t, c) => t + c.usd, 0)
+    return [
+      ...big,
+      {
+        category: `Other (${dust.length} venues)`,
+        own: false,
+        usd,
+        share: dust.reduce((t, c) => t + c.share, 0),
+        color: "#6B7280",
+      },
+    ]
+  }, [categories])
+
   const donutData = useMemo(
-    () => categories.map((c) => ({ name: c.category, value: c.usd, color: c.color })),
-    [categories]
+    () => shown.map((c) => ({ name: c.category, value: c.usd, color: c.color })),
+    [shown]
   )
 
   return (
@@ -81,8 +101,8 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
     >
       <div style={{ height: 380 }} className="w-full flex items-start gap-4">
         {/* Donut + category legend on the left */}
-        <div className="w-1/2 h-full flex flex-col">
-          <div className="flex-1">
+        <div className="w-1/2 h-full flex flex-col min-w-0">
+          <div style={{ height: 210 }} className="w-full shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -93,6 +113,7 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
                   outerRadius={100}
                   paddingAngle={1}
                   stroke="none"
+                  isAnimationActive={false}
                 >
                   {donutData.map((d) => (
                     <Cell key={d.name} fill={d.color} />
@@ -121,8 +142,8 @@ export function SllVenueBreakdown({ data }: { data: SllVenueData }) {
             </ResponsiveContainer>
           </div>
           {/* Category legend */}
-          <div className="space-y-1 mt-2">
-            {categories.map((c) => (
+          <div className="space-y-1 mt-2 overflow-y-auto min-h-0">
+            {shown.map((c) => (
               <div key={c.category} className="flex items-center justify-between text-[11px]">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: c.color }} />

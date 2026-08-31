@@ -2,6 +2,8 @@
 
 import { IncomeStatement } from "@/components/financials/income-statement"
 import { SpreadChart } from "@/components/financials/spread-chart"
+import { RevenueByProduct } from "@/components/financials/revenue-by-product"
+import { MarginChart } from "@/components/financials/margin-chart"
 import { SourceComparison } from "@/components/financials/source-comparison"
 import { formatUSD, formatUSDFull } from "@/lib/utils"
 import { useCachedFetch } from "@/lib/use-cached-fetch"
@@ -160,6 +162,10 @@ export default function FinancialsPage() {
           publish three different answers for the same months, and they disagree on the sign.
         </div>
       )}
+
+      <RevenueByProduct monthly={monthly} partialMonth={meta?.latestMonthIsPartial} />
+
+      <MarginChart monthly={monthly} />
 
       <SpreadChart daily={sllDaily} />
 
