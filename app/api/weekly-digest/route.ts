@@ -79,13 +79,13 @@ function verifyCronAuth(request: Request): {
   const authHeader = request.headers.get("authorization") || ""
 
   // Vercel Cron always sends Authorization: Bearer <CRON_SECRET>.
-  // If CRON_SECRET isn't set, we treat the request as unauthenticated —
-  // the endpoint still handles ?preview but refuses to send.
-  const isScheduled = authHeader === `Bearer ${secret}` && !!secret
+  // Fail closed: if CRON_SECRET isn't set, nothing is authorised. ?preview
+  // still works (it never sends), but a send requires the configured secret.
+  const isScheduled = !!secret && authHeader === `Bearer ${secret}`
   return {
-    ok: isScheduled || !secret,
+    ok: isScheduled,
     scheduled: isScheduled,
-    reason: secret && !isScheduled ? "bad_bearer" : undefined,
+    reason: !secret ? "missing_cron_secret" : isScheduled ? undefined : "bad_bearer",
   }
 }
 
